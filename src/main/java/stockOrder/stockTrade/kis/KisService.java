@@ -46,7 +46,6 @@ public class KisService {
     @PostConstruct
     public void init() throws IOException, InterruptedException {
         this.token = tokenService.fetchToken();
-        System.out.println("token 생성 확인 : " + token);
     }
 
     @Autowired
