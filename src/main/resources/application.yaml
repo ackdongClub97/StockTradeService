@@ -16,6 +16,11 @@ spring:
         #show_sql: true
         format_sql: true
 
-  logging:
-    level:
-      org.hibernate.SQL: debug
+hantu-openapi:
+  appkey: #appkey
+  appsecret: #appsecret
+  appUrl: https://openapivts.koreainvestment.com:29443
+  # https://openapi.koreainvestment.com:9443 실전 도메인
+logging:
+  level:
+    org.hibernate.SQL: debug
