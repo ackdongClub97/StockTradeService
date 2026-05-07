@@ -1,0 +1,252 @@
+:root {
+      --bg:       #04080f;
+      --surface:  #0b1220;
+      --border:   #152033;
+      --accent:   #00c2ff;
+      --accent2:  #00ffb2;
+      --red:      #ff4d6d;
+      --muted:    #3a5068;
+      --text:     #cde4f5;
+      --text-dim: #4d7090;
+      --gold:     #ffd166;
+      --silver:   #8fb8cc;
+      --bronze:   #c97c3a;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Noto Sans KR', sans-serif;
+      min-height: 100vh;
+    }
+
+    /* 배경 격자 */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,194,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,194,255,.025) 1px, transparent 1px);
+      background-size: 36px 36px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── 전체 레이아웃: 뷰포트 100vh, 내부만 스크롤 ── */
+    .page {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ── 헤더 (compact) ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      padding: 5px;
+    }
+
+    .header-left { display: flex; align-items: center; gap: 12px; }
+
+    .logo-mark {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700; font-size: 11px;
+      color: #04080f;
+      box-shadow: 0 0 18px rgba(0,194,255,.25);
+      flex-shrink: 0;
+    }
+
+    .main-title {
+      font-size: 16px; font-weight: 900;
+      letter-spacing: -.5px;
+      background: linear-gradient(90deg, #fff 40%, var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .sub-title { font-size: 10px; color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
+
+    .login-ui {
+        font-size: 15px;
+        color: var(--text-dim);
+        background: var(--border);
+        width: 100px;
+        text-align: center;
+    }
+
+    .status-panel { display: flex; align-items: center; gap: 8px; }
+
+    .status-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-dim);
+    }
+
+    .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+      transition: background .3s;
+    }
+    .dot.live    { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: blink 1.8s ease-in-out infinite; }
+    .dot.loading { background: var(--gold); animation: blink .6s ease-in-out infinite; }
+    .dot.error   { background: var(--red); }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:.25} }
+
+    .countdown-bar { width: 60px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .countdown-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+      transition: width 1s linear;
+    }
+    .countdown-label { font-size: 10px; color: var(--text-dim); min-width: 24px; }
+
+    /* ── 테이블 컨테이너 ── */
+    .stock-ranking-list {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .table-wrap {
+      width: 70%;
+      height: 400px;         /* 원하는 높이로 조절 */
+      overflow: hidden;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .table-wrap.flash { animation: flash .45s ease; }
+    @keyframes flash { 0%{background:rgba(0,194,255,.07)} 100%{background:var(--surface)} }
+
+    .rank-event {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    /* thead 고정 영역 */
+    .table-scroll-head {
+      flex-shrink: 0;
+      background: rgba(0,194,255,.04);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .rank-header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;  /* 왼쪽 타이틀 / 오른쪽 status-panel */
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* tbody 스크롤 영역 */
+    .table-scroll-body {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .table-scroll-body::-webkit-scrollbar { width: 4px; }
+    .table-scroll-body::-webkit-scrollbar-track { background: transparent; }
+    .table-scroll-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* 두 table의 colgroup을 동일하게 맞춰야 열 너비가 정렬됨 */
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+    col.c-rank  { width: 52px; }
+    col.c-name  { width: auto; }
+    col.c-price { width: 110px; }
+    col.c-rate  { width: 92px; }
+    col.c-vol   { width: 140px; }
+    col.c-pvol  { width: 100px; }
+
+    th {
+      padding: 9px 12px;
+      font-size: 9px; font-weight: 700;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      text-align: left;
+      white-space: nowrap;
+    }
+    th.right { text-align: right; }
+
+    tbody tr {
+      border-bottom: 1px solid rgba(21,32,51,.8);
+      transition: background .12s;
+      animation: rowIn .35s ease both;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: rgba(0,194,255,.05); }
+
+    @keyframes rowIn {
+      from { opacity: 0; transform: translateX(-6px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    td {
+      padding: 8px 12px;   /* 행 높이 조절 포인트 */
+      font-size: 12px;
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    td.right { text-align: right; }
+
+    .rank-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700; font-size: 11px;
+      background: var(--border); color: var(--text-dim);
+    }
+    .rank-badge.r1 { background: rgba(255,209,102,.13); color: var(--gold);   box-shadow: 0 0 8px rgba(255,209,102,.18); }
+    .rank-badge.r2 { background: rgba(143,184,204,.12); color: var(--silver); }
+    .rank-badge.r3 { background: rgba(201,124,58,.12);  color: var(--bronze); }
+
+    .stock-name { font-weight: 700; color: #e8f4ff; font-size: 12px; }
+    .stock-code { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); margin-top: 1px; }
+
+    .price { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 12px; color: #e8f4ff; }
+
+    .change { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 11px; }
+    .change.up   { color: var(--accent2); }
+    .change.down { color: var(--red); }
+    .change.flat { color: var(--text-dim); }
+    .change-abs  { font-size: 9px; margin-top: 1px; font-family: 'JetBrains Mono', monospace; }
+    .change-abs.up   { color: rgba(0,255,178,.45); }
+    .change-abs.down { color: rgba(255,77,109,.45); }
+
+    .vol-num      { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); margin-bottom: 3px; }
+    .vol-bar-bg   { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .vol-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 2px; transition: width .5s ease; }
+
+    .skeleton {
+      height: 11px; border-radius: 3px;
+      background: linear-gradient(90deg, var(--border) 25%, #1a2d42 50%, var(--border) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    @media (max-width: 600px) {
+      col.c-pvol { width: 0; }
+      .col-pvol  { display: none; }
+    }

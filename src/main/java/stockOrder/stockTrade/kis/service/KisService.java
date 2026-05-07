@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.kis;
+package stockOrder.stockTrade.kis.service;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -6,22 +6,22 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
 import org.springframework.http.*;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.reactive.function.client.WebClient;
-import stockOrder.stockTrade.stock.Stock;
-import stockOrder.stockTrade.stock.StockRepository;
+import reactor.core.publisher.Sinks;
+import stockOrder.stockTrade.kis.dto.ResponseOutputDTO;
+import stockOrder.stockTrade.stock.repository.StockRepository;
 import stockOrder.stockTrade.token.TokenService;
 
 import java.io.IOException;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Service
 @Slf4j
@@ -36,23 +36,27 @@ public class KisService {
     @Value("${hantu-openapi.appUrl}")
     private String apiUrl;
 
-    private final TokenService tokenService;
-    private String token;
 
-    private final WebClient webClient;
+    private String token;
+    private WebClient webClient;
+    private final TokenService tokenService;
     private final ObjectMapper objectMapper;
-    private StockRepository stockRepository;
+
+    // 실시간 랭킹 캐시
+    private final List<ResponseOutputDTO> cachedRanking = new CopyOnWriteArrayList<>();
+
+    // 모든 user가 최신 데이터 받을 수 있음
+    private final Sinks.Many<List<ResponseOutputDTO>> rankSink = Sinks.many().replay().latest();
 
     @PostConstruct
     public void init() throws IOException, InterruptedException {
         this.token = tokenService.fetchToken();
-        System.out.println("token 생성 확인 : " + token);
+        this.webClient = WebClient.builder().baseUrl(apiUrl).build();
     }
 
     @Autowired
     public KisService(TokenService tokenService, WebClient.Builder webClientBuilder, ObjectMapper objectMapper) throws IOException, InterruptedException {
         this.tokenService = tokenService;
-        this.webClient = webClientBuilder.baseUrl(apiUrl).build();
         this.objectMapper =  objectMapper;
     }
 
@@ -127,52 +131,35 @@ public class KisService {
 
     }
 
-    public String dayStockData(String startDate, String endDate) {
-        RestTemplate restTemplate = new RestTemplate();
+    @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
+    public void refreshRank() {
+        log.info("KisService refresh");
 
-        HttpHeaders headers = createVolumeRankHttpHeaders();
+        getVolumeRank().subscribe(
+          list -> {
+              cachedRanking.clear();
+              cachedRanking.addAll(list);
 
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString( apiUrl + "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice")
-                                        .queryParam("FID_COND_MRKT_DIV_CODE", "J")
-                                        .queryParam("FID_INPUT_ISCD", "005930")
-                                        .queryParam("FID_INPUT_DATE_1", startDate)
-                                        .queryParam("FID_INPUT_DATE_2", endDate)
-                                        .queryParam("FID_PERIOD_DIV_CODE", "D")
-                                        .queryParam("FID_ORG_ADJ_PRC", "0");
+              rankSink.tryEmitNext(List.copyOf(cachedRanking));
+              list.stream().limit(5).forEach(dto ->
+                      log.debug("  {}위 {} | {}원 | {}%",
+                              dto.getDataRank(), dto.getHtsKorIsnm(),
+                              dto.getStckPrpr(), dto.getPrdyCtrt()
+                      )
+              );
+          }, err -> log.error(err.getMessage(), err)
+        );
 
-        HttpEntity<?> entity = new HttpEntity<>(headers);
-
-        ResponseEntity<String> response = restTemplate.exchange(
-                builder.toUriString(),
-                HttpMethod.GET,
-                entity,
-                String.class);
-        return response.getBody();
     }
 
-    public void saveStockData(String responseBody, String stockCode) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode jsonNode1 = mapper.readTree(responseBody);
-            JsonNode jsonNode2 = jsonNode1.get("output2");
+    /* ranking data 즉시 반환 */
+    public List<ResponseOutputDTO> getCachedRanking() {
+        return List.copyOf(cachedRanking);
+    }
 
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
-
-            for(JsonNode node : jsonNode2){
-                Stock stock =  new Stock();
-                stock.setStockCode(stockCode);
-                stock.setDate(LocalDate.parse(node.get("stck_bsop_date").asText(), formatter));
-                stock.setMaxPrice(node.get("stck_hgpr").asText());
-                stock.setMinPrice(node.get("stck_lwpr").asText());
-                stock.setAccumTrans(node.get("acml_vol").asText());
-                stock.setOpenPrice(node.get("stck_oprc").asText());
-                stock.setClosePrice(node.get("stck_clpr").asText());
-
-                stockRepository.save(stock);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    /* SSE 스트림 */
+    public Flux<List<ResponseOutputDTO>> getRankingStream(){
+        return rankSink.asFlux();
     }
 
 }

@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.stock;
+package stockOrder.stockTrade.stock.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -8,7 +8,6 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
 @Entity
 @Getter
