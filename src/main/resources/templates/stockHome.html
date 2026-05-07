@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>거래량 실시간 랭킹</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/StockHome.css"/>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- 헤더 -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo-mark">ST</div>
+      <div class="title-block">
+        <div class="main-title">모의투자 시스템</div>
+        <div class="sub-title">한국투자증권 open api 활용</div>
+      </div>
+    </div>
+
+    <a class="login-ui">login/joiin</a>
+  </header>
+
+
+  <!-- 테이블: thead 고정 + tbody 스크롤 -->
+  <div class="stock-ranking-list">
+    <div class="table-wrap">
+      <!-- 고정 헤더 -->
+      <div class="table-scroll-head">
+
+        <div class="rank-header-bar">
+          <span>거래량 순위</span>
+          <div class="status-panel">
+            <div class="status-chip">
+              <span class="dot" id="statusDot"></span>
+              <span id="statusText">연결 중...</span>
+            </div>
+            <div class="status-chip" id="lastUpdateChip" style="display:none">
+              <span id="lastUpdateText">—</span>
+            </div>
+            <div class="status-chip">
+              <div class="countdown-bar">
+                <div class="countdown-fill" id="countdownFill" style="width:100%"></div>
+              </div>
+              <span class="countdown-label" id="countdownLabel">—</span>
+            </div>
+          </div>
+        </div>
+
+        <table>
+          <colgroup>
+            <col class="c-rank"/><col class="c-name"/><col class="c-price"/>
+            <col class="c-rate"/><col class="c-vol"/><col class="c-pvol"/>
+          </colgroup>
+          <thead>
+          <tr>
+            <th>순위</th>
+            <th>종목</th>
+            <th class="right">현재가</th>
+            <th class="right">등락률</th>
+            <th class="right">누적 거래량</th>
+            <th class="right col-pvol">전일 거래량</th>
+          </tr>
+          </thead>
+        </table>
+      </div>
+
+      <!-- 스크롤 바디 -->
+      <div class="table-scroll-body">
+        <table>
+          <colgroup>
+            <col class="c-rank"/><col class="c-name"/><col class="c-price"/>
+            <col class="c-rate"/><col class="c-vol"/><col class="c-pvol"/>
+          </colgroup>
+          <tbody id="rankBody">
+          <tr th:each="i : ${#numbers.sequence(1,20)}" class="skeleton-row">
+            <td><div class="skeleton" style="width:24px"></div></td>
+            <td>
+              <div class="skeleton" style="width:90px;margin-bottom:4px"></div>
+              <div class="skeleton" style="width:50px;height:9px"></div>
+            </td>
+            <td class="right"><div class="skeleton" style="width:70px;margin-left:auto"></div></td>
+            <td class="right"><div class="skeleton" style="width:50px;margin-left:auto"></div></td>
+            <td class="right"><div class="skeleton" style="width:80px;margin-left:auto"></div></td>
+            <td class="right col-pvol"><div class="skeleton" style="width:65px;margin-left:auto"></div></td>
+          </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script th:inline="none">
+  const REFRESH_SEC = 30;
+
+  const rankBody       = document.getElementById('rankBody');
+  const statusDot      = document.getElementById('statusDot');
+  const statusText     = document.getElementById('statusText');
+  const lastUpdateChip = document.getElementById('lastUpdateChip');
+  const lastUpdateText = document.getElementById('lastUpdateText');
+  const countdownFill  = document.getElementById('countdownFill');
+  const countdownLabel = document.getElementById('countdownLabel');
+
+  let remaining = REFRESH_SEC;
+  let countdownTimer = null;
+
+  function startCountdown() {
+    clearInterval(countdownTimer);
+    remaining = REFRESH_SEC;
+    countdownTimer = setInterval(() => {
+      remaining = Math.max(0, remaining - 1);
+      countdownFill.style.width = (remaining / REFRESH_SEC * 100) + '%';
+      countdownLabel.textContent = remaining + 's';
+    }, 1000);
+  }
+
+  function fmtPrice(v) { return parseInt(v || 0).toLocaleString('ko-KR') + '원'; }
+  function fmtVol(v) {
+    const n = parseInt(v || 0);
+    if (n >= 1e8) return (n / 1e8).toFixed(1) + '억주';
+    if (n >= 1e4) return Math.floor(n / 1e4).toLocaleString() + '만주';
+    return n.toLocaleString() + '주';
+  }
+  function direction(rate) { const n = parseFloat(rate); return n > 0 ? 'up' : n < 0 ? 'down' : 'flat'; }
+  function sign(rate) {
+    const n = parseFloat(rate);
+    return (n > 0 ? '▲' : n < 0 ? '▼' : '') + Math.abs(n).toFixed(2) + '%';
+  }
+
+  let maxVol = 1;
+
+  function renderTable(list) {
+    maxVol = Math.max(...list.map(d => parseInt(d.acmlVol || 0)), 1);
+    rankBody.innerHTML = '';
+
+    list.forEach((d, i) => {
+      const rank     = parseInt(d.dataRank || i + 1);
+      const dir      = direction(d.prdyCtrt);
+      const volPct   = Math.round(parseInt(d.acmlVol || 0) / maxVol * 100);
+      const badgeCls = rank <= 3 ? 'r' + rank : '';
+      const vrss     = parseInt(d.prdyVrss || 0);
+
+      const row = document.createElement('tr');
+      row.style.animationDelay = (i * 20) + 'ms';
+      row.innerHTML = `
+        <td><span class="rank-badge ${badgeCls}">${rank}</span></td>
+        <td>
+          <div class="stock-name">${d.htsKorIsnm}</div>
+          <div class="stock-code">${d.mkscShrnIscd}</div>
+        </td>
+        <td class="right"><div class="price">${fmtPrice(d.stckPrpr)}</div></td>
+        <td class="right">
+          <div class="change ${dir}">${sign(d.prdyCtrt)}</div>
+          <div class="change-abs ${dir}">${vrss > 0 ? '+' : ''}${vrss.toLocaleString()}원</div>
+        </td>
+        <td class="right">
+          <div class="vol-num">${fmtVol(d.acmlVol)}</div>
+          <div class="vol-bar-bg"><div class="vol-bar-fill" style="width:${volPct}%"></div></div>
+        </td>
+        <td class="right col-pvol">
+          <div class="vol-num">${fmtVol(d.prdyVol)}</div>
+        </td>`;
+      rankBody.appendChild(row);
+    });
+
+    const wrap = document.querySelector('.table-wrap');
+    wrap.classList.remove('flash');
+    void wrap.offsetWidth;
+    wrap.classList.add('flash');
+  }
+
+  function connectSSE() {
+    statusDot.className = 'dot loading';
+    statusText.textContent = '연결 중...';
+
+    const es = new EventSource('/api/rank/volume/stream');
+
+    es.addEventListener('volume-rank', (e) => {
+      const payload = JSON.parse(e.data);
+      renderTable(payload.data);
+      startCountdown();
+      statusDot.className = 'dot live';
+      statusText.textContent = '실시간 연결';
+      lastUpdateChip.style.display = 'flex';
+      lastUpdateText.textContent = new Date(payload.updatedAt).toLocaleTimeString('ko-KR');
+    });
+
+    es.onerror = () => {
+      statusDot.className = 'dot error';
+      statusText.textContent = '연결 끊김 · 재연결 중...';
+      es.close();
+      setTimeout(connectSSE, 5000);
+    };
+  }
+
+  connectSSE();
+</script>
+</body>
+</html>
