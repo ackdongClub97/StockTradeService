@@ -132,9 +132,9 @@ WebClient webClient = WebClient.builder()
 
 ## 📌 향후 개선 사항
 
-* 토큰 자동 갱신
+* 토큰 자동 갱신 (완료)
 * 주문 체결 로그 저장
-* 실시간 WebSocket 연동
+* 실시간 WebSocket 연동 (완료)
 * Redis 캐싱
 * Kafka DB저장
 
