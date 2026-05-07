@@ -2,6 +2,27 @@ spring:
   application:
     name: stockTrade
 
+  devtools:
+    restart:
+      enabled: true
+  web:
+    resources:
+      cache:
+        period: 0
+        cachecontrol:
+          no-cache: true
+      static-locations: file:src/main/resources/static/
+  thymeleaf:
+    cache: false
+    prefix: file:src/main/resources/templates/
+
+  task:
+    scheduling:
+      enabled: true
+
+  freemarker:
+    cache: false
+
   datasource:
     url: jdbc:h2:tcp://localhost/~/stockTrade
     username: sa
@@ -17,10 +38,15 @@ spring:
         format_sql: true
 
 hantu-openapi:
-  appkey: #appkey
-  appsecret: #appsecret
+  appkey: PSQZukbQB1Vo5jVLKl6SGhAtUQLrDL6QVKaI
+  appsecret: b0/wVpD2DCfC4YXae37LK0yK9eDsMKMkenWyVHoyErvs7KI3DWUZdn0/oiVK2ssp/DzzBGe5SSjlEOp5qtc++ZmW6SCtG9nfas1KM6eGR8Ca/H3o4iVG9KNi1MP4+ASxf0POi2BijKsirBBYK7hHcZ6YREaGMCMAXR3KU+52BbieofgskHw=
   appUrl: https://openapivts.koreainvestment.com:29443
   # https://openapi.koreainvestment.com:9443 실전 도메인
 logging:
   level:
     org.hibernate.SQL: debug
+
+kis:
+  rank:
+    refresh-interval-ms: 30000 # 30초마다 갱신
+
