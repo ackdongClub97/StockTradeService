@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.kis;
+package stockOrder.stockTrade.kis.dto;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;
