@@ -38,8 +38,8 @@ spring:
         format_sql: true
 
 hantu-openapi:
-  appkey: PSQZukbQB1Vo5jVLKl6SGhAtUQLrDL6QVKaI
-  appsecret: b0/wVpD2DCfC4YXae37LK0yK9eDsMKMkenWyVHoyErvs7KI3DWUZdn0/oiVK2ssp/DzzBGe5SSjlEOp5qtc++ZmW6SCtG9nfas1KM6eGR8Ca/H3o4iVG9KNi1MP4+ASxf0POi2BijKsirBBYK7hHcZ6YREaGMCMAXR3KU+52BbieofgskHw=
+  appkey: #{appkey}
+  appsecret: #{appsecret}
   appUrl: https://openapivts.koreainvestment.com:29443
   # https://openapi.koreainvestment.com:9443 실전 도메인
 logging:
