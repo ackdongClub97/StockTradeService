@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/rank")
+@RequestMapping("/api")
 @RequiredArgsConstructor
 @Slf4j
 public class KisController {
@@ -68,4 +68,15 @@ public class KisController {
                 .doOnCancel(() -> log.info("SSE 클라이언트 연결 종료"));
     }
 
+    @GetMapping("/stock-detail")
+    public Mono<ResponseOutputDTO> getStockDetail(@PathVariable String code) {
+        return kisService.getStockDetail(code);
+    }
+
+    @GetMapping("/stock/{code}/stream")
+    public Flux<ServerSentEvent<Object>> getStockStream(@PathVariable String code) {
+        return kisService.getStockDetailStream(code)
+                .map(data -> ServerSentEvent.builder()
+                        .event("stock-detail").data((Object) data).build());
+    }
 }

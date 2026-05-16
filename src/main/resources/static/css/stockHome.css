@@ -74,14 +74,6 @@
     }
     .sub-title { font-size: 10px; color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
 
-    .login-ui {
-        font-size: 15px;
-        color: var(--text-dim);
-        background: var(--border);
-        width: 100px;
-        text-align: center;
-    }
-
     .status-panel { display: flex; align-items: center; gap: 8px; }
 
     .status-chip {
