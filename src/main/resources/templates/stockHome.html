@@ -6,7 +6,7 @@
   <title>거래량 실시간 랭킹</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="/css/StockHome.css"/>
+  <link rel="stylesheet" href="/css/stockHome.css"/>
 </head>
 <body>
 
@@ -14,15 +14,7 @@
 
   <!-- 헤더 -->
   <header class="header">
-    <div class="header-left">
-      <div class="logo-mark">ST</div>
-      <div class="title-block">
-        <div class="main-title">모의투자 시스템</div>
-        <div class="sub-title">한국투자증권 open api 활용</div>
-      </div>
-    </div>
-
-    <a class="login-ui">login/joiin</a>
+    <div th:replace="~{fragments/header :: header}"></div>
   </header>
 
 
@@ -126,7 +118,9 @@
     if (n >= 1e4) return Math.floor(n / 1e4).toLocaleString() + '만주';
     return n.toLocaleString() + '주';
   }
+
   function direction(rate) { const n = parseFloat(rate); return n > 0 ? 'up' : n < 0 ? 'down' : 'flat'; }
+
   function sign(rate) {
     const n = parseFloat(rate);
     return (n > 0 ? '▲' : n < 0 ? '▼' : '') + Math.abs(n).toFixed(2) + '%';
@@ -135,6 +129,8 @@
   let maxVol = 1;
 
   function renderTable(list) {
+    <!-- console.log('데이터:', list[0]); -->
+
     maxVol = Math.max(...list.map(d => parseInt(d.acmlVol || 0)), 1);
     rankBody.innerHTML = '';
 
@@ -166,6 +162,11 @@
           <div class="vol-num">${fmtVol(d.prdyVol)}</div>
         </td>`;
       rankBody.appendChild(row);
+
+      // row 클릭 시 상세화면 이동
+      row.addEventListener('click', () => {
+        window.location.href = `/stock/${d.mkscShrnIscd}?name=${encodeURIComponent(d.htsKorIsnm)}`;
+      });
     });
 
     const wrap = document.querySelector('.table-wrap');
@@ -178,7 +179,7 @@
     statusDot.className = 'dot loading';
     statusText.textContent = '연결 중...';
 
-    const es = new EventSource('/api/rank/volume/stream');
+    const es = new EventSource('/api/volume/stream');
 
     es.addEventListener('volume-rank', (e) => {
       const payload = JSON.parse(e.data);

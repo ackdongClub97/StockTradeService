@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title th:text="${code} + ' 상세'">주식 상세</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="/css/StockDetail.css"/>
+
+</head>
+<body>
+
+<div id="stockData1" th:data-code="${code}"></div>
+<div id="stockData2" th:data-name="${name}"></div>
+<input id="stockData3" style="display:none;"></input>
+
+<div class="page">
+
+    <!-- 헤더 -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo-mark">ST</div>
+            <div class="title-block">
+                <div class="main-title">모의투자 시스템</div>
+                <div class="sub-title">한국투자증권 open api 활용</div>
+            </div>
+        </div>
+        <a class="back-btn" th:href="@{/stockHome}">← 목록으로</a>
+    </header>
+
+    <!-- 종목 요약 -->
+    <div class="stock-summary" id="stockSummary">
+        <div class="stock-identity">
+            <div class="stock-icon" id="stockIcon">—</div>
+            <div class="stock-name-block">
+                <div class="name" id="stockName" th:text="${name}">로딩 중...</div>
+                <div class="code-tag" id="stockCode" th:text="${code}"></div>
+            </div>
+        </div>
+        <div class="stock-price-block">
+            <div class="current-price" id="currentPrice">—</div>
+            <div class="price-change flat" id="priceChange">—</div>
+        </div>
+    </div>
+
+    <!-- 매수/매도 -->
+    <div class="trade-header">
+        <button class="buy-btn" onclick="openModal('buy')">매수</button>
+        <button class="sell-btn" onclick="openModal('shell')">매도</button>
+    </div>
+
+    <!-- 모달 -->
+    <div id="tradeModal" class="modal">
+        <div class="modal-content">
+
+            <div class="modal-top">
+                <h2 id="modalTitle">-</h2>
+                <span class="close-btn" onclick="closeModal()">✕</span>
+            </div>
+
+            <div class="stock-info">
+                <div class="stock-name" th:text="${name}">-</div>
+                <div class="stock-price" id="stockPrice">-</div>
+            </div>
+
+            <div class="input-group">
+                <label>주문 수량</label>
+                <input id="quantity" type="number" placeholder="수량 입력">
+            </div>
+
+            <div class="input-group">
+                <label>주문 가격</label>
+                <input id="orderPrice" type="number" placeholder="가격 입력">
+            </div>
+
+            <button class="submit-btn">주문하기</button>
+
+        </div>
+    </div>
+
+    <!-- 상세 지표 -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">등락률</div>
+            <div class="stat-value" id="statRate"><div class="skeleton" style="width:60px"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">누적 거래량</div>
+            <div class="stat-value" id="statVol"><div class="skeleton" style="width:80px"></div></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">전일 대비</div>
+            <div class="stat-value" id="statVrss"><div class="skeleton" style="width:70px"></div></div>
+        </div>
+    </div>
+
+    <!-- 관련 뉴스 -->
+    <div class="section-title">관련 뉴스</div>
+    <div class="news-list" id="newsList">
+        <!-- 뉴스 스켈레톤 -->
+        <div th:each="i : ${#numbers.sequence(1,4)}" class="news-skeleton">
+            <div class="skeleton" style="width:80%;margin-bottom:8px"></div>
+            <div class="skeleton" style="width:40%;height:10px;margin-bottom:6px"></div>
+            <div class="skeleton" style="width:100%;height:10px"></div>
+        </div>
+    </div>
+
+</div>
+
+<script th:inline="none">
+    const code     = document.getElementById('stockData1').dataset.code;
+    const name     = document.getElementById('stockData2').dataset.name;
+    const stockIcon = document.getElementById('stockIcon');
+
+    <!--              html             -->
+    function fmtPrice(v) { return parseInt(v || 0).toLocaleString('ko-KR') + '원'; }
+    function fmtVol(v) {
+      const n = parseInt(v || 0);
+      if (n >= 1e8) return (n / 1e8).toFixed(1) + '억주';
+      if (n >= 1e4) return Math.floor(n / 1e4).toLocaleString() + '만주';
+      return n.toLocaleString() + '주';
+    }
+    function fmtDate(str) {
+      // "Mon, 08 May 2026 10:00:00 +0900" 형식 파싱
+      const d = new Date(str);
+      return isNaN(d) ? str : d.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+    function stripHtml(str) {
+      return str.replace(/<[^>]*>/g, '');
+    }
+
+    <!--              주식 상세 조회              -->
+    function connectSSE() {
+        const es = new EventSource(`/api/stock/${code}/stream`);
+        es.addEventListener('stock-detail', (e) => {
+            const data = JSON.parse(e.data);
+
+            const rate  = parseFloat(data.prdyCtrt || 0);
+            const vrss  = parseInt(data.prdyVrss || 0);
+            const dir   = rate > 0 ? 'up' : rate < 0 ? 'down' : 'flat';
+            const sign  = rate > 0 ? '▲' : rate < 0 ? '▼' : '';
+
+            <!-- 종목 아이콘 (앞 2글자) -->
+            stockIcon.textContent = code.slice(0, 2);
+
+            document.getElementById('currentPrice').textContent = fmtPrice(data.stckPrpr);
+
+            const changeEl = document.getElementById('priceChange');
+            changeEl.className = `price-change ${dir}`;
+            changeEl.textContent = `${sign} ${Math.abs(rate).toFixed(2)}%  ${vrss > 0 ? '+' : ''}${vrss.toLocaleString()}원`;
+
+            document.getElementById('statRate').textContent  = `${sign}${Math.abs(rate).toFixed(2)}%`;
+            document.getElementById('statRate').className    = `stat-value ${dir === 'up' ? 'price-change up' : dir === 'down' ? 'price-change down' : ''}`;
+            document.getElementById('statVol').textContent   = fmtVol(data.acmlVol);
+            document.getElementById('statVrss').textContent  = `${vrss > 0 ? '+' : ''}${vrss.toLocaleString()}원`;
+        });
+    }
+
+    <!--              뉴스 조회              -->
+    fetch(`/api/news/${name}`)
+      .then(r => r.json())
+      .then(items => {
+        const newsList = document.getElementById('newsList');
+        if (!items || items.length === 0) {
+          newsList.innerHTML = '<div class="news-error">관련 뉴스가 없습니다.</div>';
+          return;
+        }
+        newsList.innerHTML = '';
+        items.forEach((item, i) => {
+          const card = document.createElement('a');
+          card.className = 'news-card';
+          card.href = item.link;
+          card.target = '_blank';
+          card.rel = 'noopener noreferrer';
+          card.style.animationDelay = (i * 60) + 'ms';
+          card.innerHTML = `
+            <div class="news-title">${item.title}</div>
+            <div class="news-meta">
+              <span>${fmtDate(item.pubDate)}</span>
+            </div>
+            <div class="news-desc">${stripHtml(item.description)}</div>
+          `;
+          newsList.appendChild(card);
+        });
+      }).catch(() => {
+        alert("catch");
+        document.getElementById('newsList').innerHTML =
+          '<div class="news-error">뉴스를 불러오지 못했습니다.</div>';
+      });
+
+    <!--              모달창              -->
+    function openModal(type) {
+        const now = new Date();
+        const formatted = now.toLocaleString('ko-KR');
+
+
+        const modal = document.getElementById('tradeModal');
+        const title = document.getElementById('modalTitle');
+        const submitBtn = document.querySelector('.submit-btn');
+
+        const price = document.getElementById('stockPrice');
+        price.innerText = document.getElementById('currentPrice').textContent;
+
+        if(type == 'buy') {
+            title.innerText = '매수 주문';
+            submitBtn.innerText = '매수하기';
+            submitBtn.style.background = 'linear-gradient(135deg, #ff3b5c, #ff6b81)';
+        } else if (type == 'sell') {
+            title.innerText = '매도 주문';
+            submitBtn.innerText = '매도하기';
+            submitBtn.style.background = 'linear-gradient(135deg, #2979ff, #5393ff)';
+        }
+
+        modal.style.display = 'block';
+    }
+
+    function closeModal() {
+        document.getElementById('tradeModal').style.display = 'none';
+    }
+
+    const quantity = document.getElementById('quantity');
+    const orderPrice = document.getElementById('orderPrice');
+    const stockPrice = document.getElementById('stockData3');
+
+    quantity.addEventListener('input', function() {
+        if (parseInt(quantity.value) < 1 || quantity.value === '0') {
+            quantity.value = 1;
+            orderPrice.value = parseInt(stockPrice.value);
+            alert('1주 이상 매수 가능합니다.');
+        } else {
+            orderPrice.value = parseInt(quantity.value) * parseInt(stockPrice.value);
+        }
+    });
+
+
+
+    connectSSE();
+</script>
+</body>
+</html>

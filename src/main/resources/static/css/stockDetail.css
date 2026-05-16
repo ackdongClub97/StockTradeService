@@ -1,0 +1,480 @@
+:root {
+          --bg:       #04080f;
+          --surface:  #0b1220;
+          --border:   #152033;
+          --accent:   #00c2ff;
+          --accent2:  #00ffb2;
+          --red:      #ff4d6d;
+          --text:     #cde4f5;
+          --text-dim: #4d7090;
+          --gold:     #ffd166;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+          background: var(--bg);
+          color: var(--text);
+          font-family: 'Noto Sans KR', sans-serif;
+          min-height: 100vh;
+        }
+
+        body::before {
+          content: '';
+          position: fixed; inset: 0;
+          background-image:
+            linear-gradient(rgba(0,194,255,.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,194,255,.025) 1px, transparent 1px);
+          background-size: 36px 36px;
+          pointer-events: none;
+          z-index: 0;
+        }
+
+        .page {
+          position: relative;
+          z-index: 1;
+          max-width: 960px;
+          margin: 0 auto;
+          padding: 18px 20px 40px;
+        }
+
+        /* ── 헤더 ── */
+        .header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding-bottom: 14px;
+          border-bottom: 1px solid var(--border);
+          margin-bottom: 24px;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .logo-mark {
+          width: 38px; height: 38px;
+          background: linear-gradient(135deg, var(--accent), var(--accent2));
+          border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          font-family: 'JetBrains Mono', monospace;
+          font-weight: 700; font-size: 11px; color: #04080f;
+          box-shadow: 0 0 18px rgba(0,194,255,.25);
+        }
+        .main-title {
+          font-size: 16px; font-weight: 900; letter-spacing: -.5px;
+          background: linear-gradient(90deg, #fff 40%, var(--accent));
+          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .sub-title { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+        .back-btn {
+          display: flex; align-items: center; gap: 6px;
+          padding: 6px 14px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          color: var(--text-dim);
+          font-size: 12px;
+          text-decoration: none;
+          transition: border-color .2s, color .2s;
+        }
+        .back-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* ── 종목 요약 카드 ── */
+        .stock-summary {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          padding: 20px 24px;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          gap: 16px;
+        }
+
+        .stock-identity { display: flex; align-items: center; gap: 14px; }
+
+        .stock-icon {
+          width: 44px; height: 44px;
+          background: linear-gradient(135deg, rgba(0,194,255,.15), rgba(0,255,178,.15));
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 10px; font-weight: 700;
+          color: var(--accent);
+        }
+
+        .stock-name-block .name {
+          font-size: 18px; font-weight: 900; color: #e8f4ff;
+        }
+        .stock-name-block .code-tag {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px; color: var(--text-dim); margin-top: 2px;
+        }
+
+        .stock-price-block { text-align: right; }
+        .current-price {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 26px; font-weight: 700; color: #e8f4ff;
+        }
+        .price-change {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 13px; margin-top: 4px;
+        }
+        .price-change.up   { color: var(--accent2); }
+        .price-change.down { color: var(--red); }
+        .price-change.flat { color: var(--text-dim); }
+
+        /* ── 상세 지표 ── */
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 12px;
+          margin-bottom: 20px;
+        }
+
+        .stat-card {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px 16px;
+        }
+        .stat-label {
+          font-size: 10px; color: var(--text-dim);
+          letter-spacing: .8px; text-transform: uppercase;
+          margin-bottom: 6px;
+        }
+        .stat-value {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 14px; font-weight: 700; color: #e8f4ff;
+        }
+
+        /* ── 로딩 스켈레톤 ── */
+        .skeleton {
+          height: 14px; border-radius: 4px;
+          background: linear-gradient(90deg, var(--border) 25%, #1a2d42 50%, var(--border) 75%);
+          background-size: 200% 100%;
+          animation: shimmer 1.4s infinite;
+        }
+        @keyframes shimmer { to { background-position: -200% 0; } }
+
+        /* ── 뉴스 섹션 ── */
+        .section-title {
+          font-size: 13px; font-weight: 700;
+          color: var(--text-dim);
+          letter-spacing: .8px;
+          text-transform: uppercase;
+          margin-bottom: 12px;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .section-title::after {
+          content: '';
+          flex: 1; height: 1px;
+          background: var(--border);
+        }
+
+        .news-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .news-card {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px 16px;
+          text-decoration: none;
+          display: block;
+          transition: border-color .2s, background .2s;
+          animation: rowIn .35s ease both;
+        }
+        .news-card:hover {
+          border-color: var(--accent);
+          background: rgba(0,194,255,.04);
+        }
+        @keyframes rowIn {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .news-title {
+          font-size: 13px; font-weight: 600;
+          color: #e8f4ff; line-height: 1.5;
+          margin-bottom: 6px;
+        }
+        /* 네이버 뉴스 제목에 포함된 <b> 태그 스타일 */
+        .news-title b { color: var(--accent); font-weight: 700; }
+
+        .news-meta {
+          display: flex; align-items: center; gap: 10px;
+          font-size: 10px; color: var(--text-dim);
+          font-family: 'JetBrains Mono', monospace;
+        }
+        .news-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--border); }
+
+        .news-desc {
+          font-size: 11px; color: var(--text-dim);
+          line-height: 1.6; margin-top: 4px;
+        }
+
+        .news-skeleton {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px 16px;
+        }
+
+        .news-error {
+          text-align: center;
+          padding: 32px;
+          color: var(--text-dim);
+          font-size: 13px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+        }
+
+        @media (max-width: 600px) {
+          .stats-grid { grid-template-columns: repeat(2, 1fr); }
+          .stock-summary { flex-direction: column; align-items: flex-start; }
+          .stock-price-block { text-align: left; }
+        }
+
+        /* 매도/매수버튼 */
+        .trade-header {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .trade-header button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .buy-btn {
+            background-color: #e53935;
+            color: white;
+        }
+
+        .sell-btn {
+            background-color: #1976d2;
+            color: white;
+        }
+
+        .rate-box {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        /* 모달창 */
+        .trade-header {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .trade-header button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .buy-btn {
+            background-color: #e53935;
+            color: white;
+        }
+
+        .sell-btn {
+            background-color: #1976d2;
+            color: white;
+        }
+
+        /* 모달 배경 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 999;
+
+            left: 0;
+            top: 0;
+
+            width: 100%;
+            height: 100%;
+
+            background-color: rgba(0,0,0,0.5);
+        }
+
+        /* 모달 박스 */
+        .trade-header {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .trade-header button {
+            flex: 1;
+            padding: 14px;
+
+            border: none;
+            border-radius: 12px;
+
+            font-size: 16px;
+            font-weight: 700;
+
+            cursor: pointer;
+
+            transition: 0.2s;
+        }
+
+        .trade-header button:hover {
+            transform: translateY(-2px);
+        }
+
+        .buy-btn {
+            background: #ff3b5c;
+            color: white;
+        }
+
+        .sell-btn {
+            background: #2979ff;
+            color: white;
+        }
+
+        /* 모달 배경 */
+        .modal {
+            display: none;
+
+            position: fixed;
+            z-index: 999;
+
+            left: 0;
+            top: 0;
+
+            width: 100%;
+            height: 100%;
+
+            background: rgba(0,0,0,0.6);
+
+            backdrop-filter: blur(4px);
+        }
+
+        /* 모달 박스 */
+        .modal-content {
+            width: 380px;
+
+            background: #181a20;
+            color: white;
+
+            margin: 8% auto;
+            padding: 24px;
+
+            border-radius: 20px;
+
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        /* 상단 */
+        .modal-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-top h2 {
+            font-size: 22px;
+            margin: 0;
+        }
+
+        .close-btn {
+            font-size: 20px;
+            cursor: pointer;
+            color: #aaa;
+        }
+
+        /* 종목 정보 */
+        .stock-info {
+            background: #23262f;
+            border-radius: 14px;
+
+            padding: 16px;
+        }
+
+        .stock-name {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .stock-price {
+            margin-top: 6px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        /* 입력 */
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .input-group label {
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        .input-group input {
+            background: #23262f;
+            border: 1px solid #333;
+
+            color: white;
+
+            padding: 14px;
+            border-radius: 12px;
+
+            font-size: 15px;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border: 1px solid #555;
+        }
+
+        /* 주문 버튼 */
+        .submit-btn {
+            margin-top: 10px;
+
+            padding: 16px;
+
+            border: none;
+            border-radius: 14px;
+
+            background: linear-gradient(135deg, #ff3b5c, #ff6b81);
+
+            color: white;
+
+            font-size: 16px;
+            font-weight: bold;
+
+            cursor: pointer;
+
+            transition: 0.2s;
+        }
+
+        .submit-btn:hover {
+            transform: scale(1.02);
+        }
