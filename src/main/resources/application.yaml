@@ -23,6 +23,11 @@ spring:
   freemarker:
     cache: false
 
+  security:
+    user:
+      name: admin
+      password: 1234
+
   datasource:
     url: jdbc:h2:tcp://localhost/~/stockTrade
     username: sa
@@ -41,7 +46,7 @@ hantu-openapi:
   appkey: #{appkey}
   appsecret: #{appsecret}
   appUrl: https://openapivts.koreainvestment.com:29443
-  # https://openapi.koreainvestment.com:9443 실전 도메인
+  #appUrl: https://openapi.koreainvestment.com:9443 #실전 도메인
 logging:
   level:
     org.hibernate.SQL: debug
@@ -49,4 +54,8 @@ logging:
 kis:
   rank:
     refresh-interval-ms: 30000 # 30초마다 갱신
+
+naver-openapi:
+  clientId: #{clientId}
+  clientSecret: #{clientSecret}
 
