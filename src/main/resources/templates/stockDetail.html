@@ -18,94 +18,90 @@
 <div class="page">
 
     <!-- 헤더 -->
+    <!-- 헤더 -->
     <header class="header">
-        <div class="header-left">
-            <div class="logo-mark">ST</div>
-            <div class="title-block">
-                <div class="main-title">모의투자 시스템</div>
-                <div class="sub-title">한국투자증권 open api 활용</div>
-            </div>
-        </div>
-        <a class="back-btn" th:href="@{/stockHome}">← 목록으로</a>
+        <div th:replace="~{fragments/header :: header}"></div>
     </header>
 
-    <!-- 종목 요약 -->
-    <div class="stock-summary" id="stockSummary">
-        <div class="stock-identity">
-            <div class="stock-icon" id="stockIcon">—</div>
-            <div class="stock-name-block">
-                <div class="name" id="stockName" th:text="${name}">로딩 중...</div>
-                <div class="code-tag" id="stockCode" th:text="${code}"></div>
+    <div class="page-width">
+        <!-- 종목 요약 -->
+        <div class="stock-summary" id="stockSummary">
+            <div class="stock-identity">
+                <div class="stock-icon" id="stockIcon">—</div>
+                <div class="stock-name-block">
+                    <div class="name" id="stockName" th:text="${name}">로딩 중...</div>
+                    <div class="code-tag" id="stockCode" th:text="${code}"></div>
+                </div>
+            </div>
+            <div class="stock-price-block">
+                <div class="current-price" id="currentPrice">—</div>
+                <div class="price-change flat" id="priceChange">—</div>
             </div>
         </div>
-        <div class="stock-price-block">
-            <div class="current-price" id="currentPrice">—</div>
-            <div class="price-change flat" id="priceChange">—</div>
+
+        <!-- 매수/매도 -->
+        <div class="trade-header">
+            <button class="buy-btn" onclick="openModal('buy')">매수</button>
+            <button class="sell-btn" onclick="openModal('sell')">매도</button>
         </div>
-    </div>
 
-    <!-- 매수/매도 -->
-    <div class="trade-header">
-        <button class="buy-btn" onclick="openModal('buy')">매수</button>
-        <button class="sell-btn" onclick="openModal('shell')">매도</button>
-    </div>
+        <!-- 모달 -->
+        <div id="tradeModal" class="modal">
+            <div class="modal-content">
 
-    <!-- 모달 -->
-    <div id="tradeModal" class="modal">
-        <div class="modal-content">
+                <div class="modal-top">
+                    <h2 id="modalTitle">-</h2>
+                    <span class="close-btn" onclick="closeModal()">✕</span>
+                </div>
 
-            <div class="modal-top">
-                <h2 id="modalTitle">-</h2>
-                <span class="close-btn" onclick="closeModal()">✕</span>
+                <div class="stock-info">
+                    <div class="stock-name" th:text="${name}">-</div>
+                    <div class="stock-price" id="stockPrice">-</div>
+                </div>
+
+                <div class="input-group">
+                    <label>주문 수량</label>
+                    <input id="quantity" type="number" placeholder="수량 입력">
+                </div>
+
+                <div class="input-group">
+                    <label>주문 가격</label>
+                    <input id="orderPrice" type="number" placeholder="가격 입력">
+                </div>
+
+                <button class="submit-btn" id="submit-btn">주문하기</button>
+
             </div>
+        </div>
 
-            <div class="stock-info">
-                <div class="stock-name" th:text="${name}">-</div>
-                <div class="stock-price" id="stockPrice">-</div>
+        <!-- 상세 지표 -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">등락률</div>
+                <div class="stat-value" id="statRate"><div class="skeleton" style="width:60px"></div></div>
             </div>
-
-            <div class="input-group">
-                <label>주문 수량</label>
-                <input id="quantity" type="number" placeholder="수량 입력">
+            <div class="stat-card">
+                <div class="stat-label">누적 거래량</div>
+                <div class="stat-value" id="statVol"><div class="skeleton" style="width:80px"></div></div>
             </div>
-
-            <div class="input-group">
-                <label>주문 가격</label>
-                <input id="orderPrice" type="number" placeholder="가격 입력">
+            <div class="stat-card">
+                <div class="stat-label">전일 대비</div>
+                <div class="stat-value" id="statVrss"><div class="skeleton" style="width:70px"></div></div>
             </div>
-
-            <button class="submit-btn">주문하기</button>
-
         </div>
+
+        <!-- 관련 뉴스 -->
+        <div class="section-title">관련 뉴스</div>
+        <div class="news-list" id="newsList">
+            <!-- 뉴스 스켈레톤 -->
+            <div th:each="i : ${#numbers.sequence(1,4)}" class="news-skeleton">
+                <div class="skeleton" style="width:80%;margin-bottom:8px"></div>
+                <div class="skeleton" style="width:40%;height:10px;margin-bottom:6px"></div>
+                <div class="skeleton" style="width:100%;height:10px"></div>
+            </div>
+        </div>
+
     </div>
-
-    <!-- 상세 지표 -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="stat-label">등락률</div>
-            <div class="stat-value" id="statRate"><div class="skeleton" style="width:60px"></div></div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">누적 거래량</div>
-            <div class="stat-value" id="statVol"><div class="skeleton" style="width:80px"></div></div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">전일 대비</div>
-            <div class="stat-value" id="statVrss"><div class="skeleton" style="width:70px"></div></div>
-        </div>
-    </div>
-
-    <!-- 관련 뉴스 -->
-    <div class="section-title">관련 뉴스</div>
-    <div class="news-list" id="newsList">
-        <!-- 뉴스 스켈레톤 -->
-        <div th:each="i : ${#numbers.sequence(1,4)}" class="news-skeleton">
-            <div class="skeleton" style="width:80%;margin-bottom:8px"></div>
-            <div class="skeleton" style="width:40%;height:10px;margin-bottom:6px"></div>
-            <div class="skeleton" style="width:100%;height:10px"></div>
-        </div>
-    </div>
-
 </div>
 
 <script th:inline="none">
@@ -145,6 +141,7 @@
             stockIcon.textContent = code.slice(0, 2);
 
             document.getElementById('currentPrice').textContent = fmtPrice(data.stckPrpr);
+            document.getElementById('stockData3').value = data.stckPrpr;
 
             const changeEl = document.getElementById('priceChange');
             changeEl.className = `price-change ${dir}`;
@@ -189,17 +186,24 @@
           '<div class="news-error">뉴스를 불러오지 못했습니다.</div>';
       });
 
+
+    let modalStockPrice = 0;
+    const orderType = null;
     <!--              모달창              -->
     function openModal(type) {
         const now = new Date();
         const formatted = now.toLocaleString('ko-KR');
-
+        orderType = type;
 
         const modal = document.getElementById('tradeModal');
         const title = document.getElementById('modalTitle');
         const submitBtn = document.querySelector('.submit-btn');
 
         const price = document.getElementById('stockPrice');
+
+        const clickPrice = parseInt(document.getElementById('stockData3').value || 0);
+        modalStockPrice = clickPrice;
+
         price.innerText = document.getElementById('currentPrice').textContent;
 
         if(type == 'buy') {
@@ -216,24 +220,55 @@
     }
 
     function closeModal() {
+        document.getElementById('quantity').value = 0;
+        document.getElementById('orderPrice').value = 0;
         document.getElementById('tradeModal').style.display = 'none';
     }
 
     const quantity = document.getElementById('quantity');
     const orderPrice = document.getElementById('orderPrice');
-    const stockPrice = document.getElementById('stockData3');
 
     quantity.addEventListener('input', function() {
+
+    if (parseInt(quantity.value) < 1 || quantity.value === '0') {
+
+        quantity.value = 1;
+        orderPrice.value = modalStockPrice;
+
+        alert('1주 이상 매수 가능합니다.');
+
+    } else {
+        orderPrice.value = parseInt(quantity.value) * modalStockPrice;
+    }
+});
+
+    const submitBtn = document.getElementById("submit-btn");
+
+    submitBtn.addEventListener('click', () => {
         if (parseInt(quantity.value) < 1 || quantity.value === '0') {
-            quantity.value = 1;
-            orderPrice.value = parseInt(stockPrice.value);
-            alert('1주 이상 매수 가능합니다.');
-        } else {
-            orderPrice.value = parseInt(quantity.value) * parseInt(stockPrice.value);
+            alert('수량을 입력하세요.');
+            return;
         }
+
+        fetch('/api/order/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                stockCode: code,
+                stockName: name,
+                orderType: orderType == 'buy' ? 'BUY' : 'SELL',
+                quantity: quantity.value,
+                price : modalStockPrice, /* 단가 */
+                memberId : memberId
+            })
+        }).then(r => r.json())
+        .then(data => {
+            alert('주문완료 : 주문번호 : ${data.orderId}');
+            closeModal();
+        }).catch(() => {
+            alert('주문 처리 중 오류가 발생했습니다.');
+        });
     });
-
-
 
     connectSSE();
 </script>

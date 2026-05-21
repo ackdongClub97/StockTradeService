@@ -1,16 +1,24 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
-<body>
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.w3.org/1999/xhtml">
 
-<header th:fragment="header" class="header">
-    <div class="header-left">
+<body>
+<header th:fragment="header" class="header" >
+    <link rel="stylesheet" href="/css/header.css"/>
+    <a class="header-left" th:href="@{/stockHome}">
         <div class="logo-mark">ST</div>
         <div class="title-block">
             <div class="main-title">모의투자 시스템</div>
             <div class="sub-title">한국투자증권 open api 활용</div>
         </div>
-    </div>
+
+
+    </a>
+
+    <a th:href="@{/login}" class="login_btn" sec:authorize="isAnonymous()">logIn/join</a>
+    <!--<a th:href="@{/logout}" class="login_btn" sec:authorize="isAuthenticated()">logOut</a>-->
+
 </header>
+
 
 </body>
 </html>

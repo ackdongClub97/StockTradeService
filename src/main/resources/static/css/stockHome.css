@@ -41,38 +41,6 @@
       height: 100vh;
     }
 
-    /* ── 헤더 (compact) ── */
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding-bottom: 14px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      padding: 5px;
-    }
-
-    .header-left { display: flex; align-items: center; gap: 12px; }
-
-    .logo-mark {
-      width: 38px; height: 38px;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 700; font-size: 11px;
-      color: #04080f;
-      box-shadow: 0 0 18px rgba(0,194,255,.25);
-      flex-shrink: 0;
-    }
-
-    .main-title {
-      font-size: 16px; font-weight: 900;
-      letter-spacing: -.5px;
-      background: linear-gradient(90deg, #fff 40%, var(--accent));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .sub-title { font-size: 10px; color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
 
     .status-panel { display: flex; align-items: center; gap: 8px; }
 
@@ -219,12 +187,12 @@
     .price { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 12px; color: #e8f4ff; }
 
     .change { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 11px; }
-    .change.up   { color: var(--accent2); }
-    .change.down { color: var(--red); }
+    .change.up   { color: var(--red); }
+    .change.down { color: var(--accent2); }
     .change.flat { color: var(--text-dim); }
     .change-abs  { font-size: 9px; margin-top: 1px; font-family: 'JetBrains Mono', monospace; }
-    .change-abs.up   { color: rgba(0,255,178,.45); }
-    .change-abs.down { color: rgba(255,77,109,.45); }
+    .change-abs.up   { color: rgba(255,77,109,.45); }
+    .change-abs.down { color: rgba(0,255,178,.45); }
 
     .vol-num      { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); margin-bottom: 3px; }
     .vol-bar-bg   { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }

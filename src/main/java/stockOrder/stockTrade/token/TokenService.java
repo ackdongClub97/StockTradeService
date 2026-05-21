@@ -2,6 +2,7 @@ package stockOrder.stockTrade.token;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -26,7 +27,6 @@ public class TokenService {
 
 
     public String fetchToken() throws IOException, InterruptedException {
-
         String url = apiUrl + "/oauth2/tokenP";
         String json = "{\"grant_type\":\"client_credentials\",\"appkey\":\""
                 + appKey + "\",\"appsecret\":\"" + appSecret + "\"}";
@@ -39,7 +39,7 @@ public class TokenService {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        System.out.println("Get Token");
+
         return response.body();
     }
 

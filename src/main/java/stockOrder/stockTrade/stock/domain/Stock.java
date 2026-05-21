@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDate;
+import java.util.Date;
 
 @Entity
 @Getter
@@ -18,12 +19,71 @@ public class Stock {
     @GeneratedValue
     @Column(name="stock_id")
     private Long id;
-    private String stockCode;
-    private String maxPrice;
-    private String minPrice;
-    private String accumTrans;
-    private String openPrice;
-    private String closePrice;
-    private LocalDate date;
+    // HTS 한글 종목명
+    private String htsKorIsnm;
 
+    // 주식 하한가
+    private String stckShrnIscd;
+
+    // 유가증권 단축 종목코드
+    private String mkscShrnIscd;
+
+    // 데이터 순위
+    private String dataRank;
+
+    // 주식 현재가
+    private String stckPrpr;
+
+    // 전일 대비 부호
+    private String prdyVrssSign;
+
+    // 전일 대비
+    private String prdyVrss;
+
+    // 전일 대비율
+    private String prdyCtrt;
+
+    // 누적 거래량
+    private String acmlVol;
+
+    // 전일 거래량
+    private String prdyVol;
+
+    // 상장 수주
+    private String lstnStcn;
+
+    // 평균 거래량
+    private String avrgVol;
+
+    // N일전종가대비현재가대비율
+    private String nBefrClprVrssPrprRate;
+
+    // 거래량 증가율
+    private String volInrt;
+
+    // 거래량 회전율
+    private String volTnrt;
+
+    // N일 거래량 회전율
+    private String ndayVolTnrt;
+
+    // 평균 거래 대액
+    private String avrgTrPbmn;
+
+    // 거래대금회전률
+    private String trPbmnTnrt;
+
+    // N일 거래대금 회전율
+    private String ndayTrPbmnTnrt;
+
+    // 누적 거래 대금
+    private String acmlTrPbmn;
+
+    // 주식 상한가
+    private String stckMxpr;
+
+    // 주식 하한가
+    private String stckLlam;
+
+    private LocalDate date;
 }
