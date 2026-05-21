@@ -4,7 +4,7 @@ spring:
 
   devtools:
     restart:
-      enabled: true
+      enabled: false
   web:
     resources:
       cache:
@@ -29,7 +29,7 @@ spring:
       password: 1234
 
   datasource:
-    url: jdbc:h2:tcp://localhost/~/stockTrade
+    url: jdbc:h2:file:~/stockTrade
     username: sa
     password:
     driver-class-name: org.h2.Driver
@@ -41,6 +41,17 @@ spring:
       hibernate:
         #show_sql: true
         format_sql: true
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: order-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 hantu-openapi:
   appkey: #{appkey}
