@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.kis.service;
+package stockOrder.stockTrade.kis;
 
 import io.netty.handler.codec.PrematureChannelClosureException;
 import jakarta.annotation.PostConstruct;
@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,11 +17,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
-import stockOrder.stockTrade.kis.dto.ResponseOutputDTO;
-import stockOrder.stockTrade.order.domain.Order;
-import stockOrder.stockTrade.order.dto.OrderResponse;
-import stockOrder.stockTrade.stock.domain.Stock;
-import stockOrder.stockTrade.stock.repository.StockRepository;
+import stockOrder.stockTrade.order.Order;
+import stockOrder.stockTrade.order.OrderResponse;
+import stockOrder.stockTrade.stock.Stock;
+import stockOrder.stockTrade.stock.StockRepository;
 import stockOrder.stockTrade.token.TokenService;
 
 import java.io.IOException;
@@ -29,8 +29,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Timer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 
 @Service
@@ -141,7 +143,7 @@ public class KisService {
         }
     }
 
-    public Mono<List<ResponseOutputDTO>> getVolumeRank() {
+    public Mono<List<ResponseOutputDTO>> getVolumeRank(String timeChk) {
 
         HttpHeaders headers = createVolumeRankHttpHeaders();
         String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
@@ -152,7 +154,7 @@ public class KisService {
                         .queryParam("FID_COND_SCR_DIV_CODE", "20171")
                         .queryParam("FID_INPUT_ISCD", "0002")
                         .queryParam("FID_DIV_CLS_CODE", "0")
-                        .queryParam("FID_BLNG_CLS_CODE", "0")
+                        .queryParam("FID_BLNG_CLS_CODE", timeChk)
                         .queryParam("FID_TRGT_CLS_CODE", "111111111")
                         .queryParam("FID_TRGT_EXLS_CLS_CODE", "000000")
                         .queryParam("FID_INPUT_PRICE_1", "0")
@@ -178,9 +180,10 @@ public class KisService {
 
     }
 
-    @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:15000}", initialDelay = 0)
+    @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
     public void refreshRank() {
-        if(!isMarketOpen()) {
+
+        /*if(!isMarketOpen()) {
             if(!saveToday && !cachedData.isEmpty()) {
                 saveStockEndData(List.copyOf(cachedData));
                 saveToday = true;
@@ -194,9 +197,30 @@ public class KisService {
         }
 
         // 장열리면 초기화
+        saveToday = false;*/
+
+        // 시간별로 장 구분
+        String timeChk;
+
+        if(isMarketOpen()) {
+            timeChk = "0";
+        } else if (isAfterMarket()) {
+            timeChk = "1";
+        } else {
+            if(!saveToday && !cachedData.isEmpty()) {
+                saveStockEndData(List.copyOf(cachedData));
+                saveToday = true;
+                log.info("장마감 최종 랭킹 저장");
+            }
+            if(!cachedData.isEmpty()) {
+                rankSink.tryEmitNext(List.copyOf(cachedData));
+            }
+            return;
+        }
+        // 장 열리면 초기화
         saveToday = false;
 
-        getVolumeRank().subscribe(
+        getVolumeRank(timeChk).subscribe(
                 list -> {
                     cachedData.clear();
                     cachedData.addAll(list);
@@ -213,11 +237,13 @@ public class KisService {
 
     /* SSE 스트림 */
     public Flux<List<ResponseOutputDTO>> getRankingStream(){
+        String timeChk = isMarketOpen() ? "0" : isAfterMarket() ? "1" : null;
+
         return rankSink.asFlux()
                 .doOnSubscribe(s -> {
                             // 장마감 전
-                            if(cachedData.isEmpty() || isMarketOpen()) {
-                                getVolumeRank().subscribe(
+                            if(timeChk != null) {
+                                getVolumeRank(timeChk).subscribe(
                                         data -> rankSink.tryEmitNext(data),
                                         err -> log.error("랭킹 조회 실패: {}",  err.getMessage())
                                 );
@@ -329,6 +355,17 @@ public class KisService {
         LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
         LocalTime open = LocalTime.of(9, 0);
         LocalTime close = LocalTime.of(15, 30);
+
+        DayOfWeek day = LocalDate.now(ZoneId.of("Asia/Seoul")).getDayOfWeek();
+        boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
+
+        return isWeekday && now.isAfter(open) && now.isBefore(close);
+    }
+
+    private boolean isAfterMarket() {
+        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
+        LocalTime open = LocalTime.of(15, 30);
+        LocalTime close = LocalTime.of(18, 0);
 
         DayOfWeek day = LocalDate.now(ZoneId.of("Asia/Seoul")).getDayOfWeek();
         boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;

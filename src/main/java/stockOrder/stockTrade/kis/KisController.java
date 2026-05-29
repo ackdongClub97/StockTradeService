@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.kis.controller;
+package stockOrder.stockTrade.kis;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -8,8 +8,6 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import stockOrder.stockTrade.kis.service.KisService;
-import stockOrder.stockTrade.kis.dto.ResponseOutputDTO;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -30,12 +28,12 @@ public class KisController {
 
     @GetMapping("/volume-rank")
     public Mono<List<ResponseOutputDTO>> getVolumeRank() {
-        return kisService.getVolumeRank();
+        return kisService.getVolumeRank("0");
     }
 
     @GetMapping("/volume")
     public Mono<Map<String, Object>> getVolumeRanking() {
-        return kisService.getVolumeRank().map(list -> Map.of(
+        return kisService.getVolumeRank("0").map(list -> Map.of(
                 "updatedTime", LocalDateTime.now().toString(),
                 "count", list.size(),
                 "data", list)
