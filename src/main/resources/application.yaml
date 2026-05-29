@@ -25,8 +25,8 @@ spring:
 
   security:
     user:
-      name: admin
-      password: 1234
+      name: ADMIN
+      password: 12345678
 
   datasource:
     url: jdbc:h2:file:~/stockTrade
@@ -36,7 +36,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: create
+      ddl-auto: update
     properties:
       hibernate:
         #show_sql: true
