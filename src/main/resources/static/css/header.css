@@ -49,3 +49,5 @@
     .sub-title { font-size: 10px; color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
 
     .login_btn{ color: white; text-decoration: none; color: var(--text-dim);}
+
+    .name {color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }

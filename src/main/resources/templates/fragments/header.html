@@ -13,12 +13,13 @@
 
 
     </a>
-
-    <a th:href="@{/login}" class="login_btn" sec:authorize="isAnonymous()">logIn/join</a>
-    <!--<a th:href="@{/logout}" class="login_btn" sec:authorize="isAuthenticated()">logOut</a>-->
+    <div>
+        <span class="name" sec:authorize="isAuthenticated()" sec:authentication="principal.member.name"></span><span class="name" sec:authorize="isAuthenticated()"> 님</span> |  </span>
+        <a th:href="@{/login}" class="login_btn" sec:authorize="isAnonymous()">logIn/join</a>
+        <a th:href="@{/logout}" class="login_btn" sec:authorize="isAuthenticated()">logOut</a>
+    </div>
 
 </header>
-
 
 </body>
 </html>

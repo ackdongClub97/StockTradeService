@@ -1,0 +1,158 @@
+:root {
+      --bg:       #04080f;
+      --surface:  #0b1220;
+      --border:   #152033;
+      --accent:   #00c2ff;
+      --accent2:  #00ffb2;
+      --red:      #ff4d6d;
+      --text:     #cde4f5;
+      --text-dim: #4d7090;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Noto Sans KR', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,194,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,194,255,.025) 1px, transparent 1px);
+      background-size: 36px 36px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 460px;
+    }
+
+    .logo-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 36px;
+    }
+
+    .logo-mark {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700; font-size: 14px;
+      color: #04080f;
+      box-shadow: 0 0 32px rgba(0,194,255,.3);
+      margin-bottom: 14px;
+    }
+
+    .logo-title {
+      font-size: 20px; font-weight: 900;
+      letter-spacing: -0.5px;
+      background: linear-gradient(90deg, #fff 40%, var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+
+    .logo-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 28px;
+    }
+
+    .card-title {
+      font-size: 18px; font-weight: 700;
+      margin-bottom: 24px; color: #e8f4ff;
+    }
+
+    /* 에러/성공 메시지 */
+    .msg {
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .msg.error { background: rgba(255,77,109,.1); border: 1px solid rgba(255,77,109,.3); color: var(--red); }
+    .msg.success { background: rgba(0,255,178,.1); border: 1px solid rgba(0,255,178,.3); color: var(--accent2); }
+
+    .input-group { margin-bottom: 16px; }
+
+    .input-group label {
+      display: block;
+      font-size: 12px; color: var(--text-dim);
+      margin-bottom: 6px; letter-spacing: .5px;
+    }
+
+    .input-group input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'Noto Sans KR', sans-serif;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    .input-group input:focus { border-color: var(--accent); }
+    .input-group input::placeholder { color: var(--text-dim); }
+    .input-group input.invalid { border-color: var(--red); }
+    .input-group input.valid { border-color: var(--accent2); }
+
+    .field-msg {
+      font-size: 11px; margin-top: 4px;
+      display: none;
+    }
+    .field-msg.error { color: var(--red); display: block; }
+    .field-msg.success { color: var(--accent2); display: block; }
+
+    /* 씨드 머니 안내 */
+    .seed-info {
+      background: rgba(0,194,255,.05);
+      border: 1px solid rgba(0,194,255,.15);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 20px;
+    }
+    .seed-info span { color: var(--accent); font-weight: 700; }
+
+    .submit-btn {
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none; border-radius: 8px;
+      color: #04080f;
+      font-size: 14px; font-weight: 700;
+      font-family: 'Noto Sans KR', sans-serif;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+    .submit-btn:hover { opacity: .85; }
+    .submit-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .bottom-link {
+      text-align: center; margin-top: 20px;
+      font-size: 13px; color: var(--text-dim);
+    }
+    .bottom-link a { color: var(--accent); text-decoration: none; font-weight: 500; }
+    .bottom-link a:hover { text-decoration: underline; }

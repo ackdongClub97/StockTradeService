@@ -1,0 +1,166 @@
+:root {
+      --bg:       #04080f;
+      --surface:  #0b1220;
+      --border:   #152033;
+      --accent:   #00c2ff;
+      --accent2:  #00ffb2;
+      --red:      #ff4d6d;
+      --text:     #cde4f5;
+      --text-dim: #4d7090;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Noto Sans KR', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,194,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,194,255,.025) 1px, transparent 1px);
+      background-size: 36px 36px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 420px;
+      padding: 20px;
+    }
+
+    /* 로고 */
+    .logo-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 36px;
+    }
+
+    .logo-mark {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700; font-size: 14px;
+      color: #04080f;
+      box-shadow: 0 0 32px rgba(0,194,255,.3);
+      margin-bottom: 14px;
+    }
+
+    .logo-title {
+      font-size: 20px; font-weight: 900;
+      letter-spacing: -0.5px;
+      background: linear-gradient(90deg, #fff 40%, var(--accent));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+
+    .logo-sub {
+      font-size: 12px; color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    /* 카드 */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 28px;
+    }
+
+    .card-title {
+      font-size: 18px; font-weight: 700;
+      margin-bottom: 24px;
+      color: #e8f4ff;
+    }
+
+    /* 에러 메시지 */
+    .error-msg {
+      background: rgba(255,77,109,.1);
+      border: 1px solid rgba(255,77,109,.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--red);
+      margin-bottom: 16px;
+    }
+
+    /* 입력 필드 */
+    .input-group {
+      margin-bottom: 16px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      letter-spacing: .5px;
+    }
+
+    .input-group input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'Noto Sans KR', sans-serif;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    .input-group input:focus {
+      border-color: var(--accent);
+    }
+
+    .input-group input::placeholder {
+      color: var(--text-dim);
+    }
+
+    /* 버튼 */
+    .submit-btn {
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: 8px;
+      color: #04080f;
+      font-size: 14px;
+      font-weight: 700;
+      font-family: 'Noto Sans KR', sans-serif;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: opacity .2s;
+    }
+
+    .submit-btn:hover { opacity: .85; }
+
+    /* 하단 링크 */
+    .bottom-link {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    .bottom-link a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .bottom-link a:hover { text-decoration: underline; }
