@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.ViewController;
+package stockOrder.stockTrade.view;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -25,7 +25,15 @@ public class PageController {
         return "stockDetail";
     }
 
+    @GetMapping("/login")
+    public String loginPage() {
+        return "login";
+    }
 
+    @GetMapping("/join")
+    public String joinPage() {
+        return "join";
+    }
 
 
 }

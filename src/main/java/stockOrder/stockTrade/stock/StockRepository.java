@@ -1,7 +1,6 @@
-package stockOrder.stockTrade.stock.repository;
+package stockOrder.stockTrade.stock;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-import stockOrder.stockTrade.stock.domain.Stock;
 
 import java.time.LocalDate;
 import java.util.List;

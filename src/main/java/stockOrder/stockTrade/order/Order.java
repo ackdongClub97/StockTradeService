@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.order.domain;
+package stockOrder.stockTrade.order;
 
 import jakarta.persistence.*;
 import lombok.Getter;

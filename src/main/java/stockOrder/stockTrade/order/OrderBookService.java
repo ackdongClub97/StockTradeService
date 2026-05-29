@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.order.service;
+package stockOrder.stockTrade.order;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -6,11 +6,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
-import stockOrder.stockTrade.kis.service.KisService;
-import stockOrder.stockTrade.order.domain.Order;
-import stockOrder.stockTrade.order.domain.OrderStatus;
-import stockOrder.stockTrade.order.dto.OrderResponse;
-import stockOrder.stockTrade.order.repository.OrderRepository;
+import stockOrder.stockTrade.kis.KisService;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;

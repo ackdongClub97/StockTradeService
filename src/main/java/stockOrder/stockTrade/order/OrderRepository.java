@@ -1,9 +1,7 @@
-package stockOrder.stockTrade.order.repository;
+package stockOrder.stockTrade.order;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
-import stockOrder.stockTrade.order.domain.Order;
-import stockOrder.stockTrade.order.domain.OrderStatus;
 
 import java.util.List;
 

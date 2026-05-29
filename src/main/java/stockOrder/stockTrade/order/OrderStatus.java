@@ -1,4 +1,4 @@
-package stockOrder.stockTrade.order.domain;
+package stockOrder.stockTrade.order;
 
 public enum OrderStatus {
     PENDING,        // 대기

@@ -1,8 +1,7 @@
-package stockOrder.stockTrade.order.dto;
+package stockOrder.stockTrade.order;
 
 import lombok.Getter;
 import lombok.Setter;
-import stockOrder.stockTrade.order.domain.OrderType;
 
 @Getter
 @Setter
