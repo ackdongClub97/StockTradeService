@@ -1,0 +1,7 @@
+spring:
+  web:
+    resources:
+      static-locations: classpath:/static/
+  thymeleaf:
+    cache: true
+    prefix: classpath:/templates/
