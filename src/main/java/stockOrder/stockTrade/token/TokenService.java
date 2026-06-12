@@ -2,10 +2,10 @@ package stockOrder.stockTrade.token;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.ResponseStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.net.URI;
@@ -15,6 +15,7 @@ import java.net.http.HttpResponse;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class TokenService {
     @Value("${hantu-openapi.appkey}")
     private String appKey;
@@ -40,7 +41,18 @@ public class TokenService {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        return response.body();
+        String body = response.body();
+        log.info("[TokenService] {}", body);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode node = objectMapper.readTree(body);
+        String token = node.get("access_token").asText();
+
+        if(token == null || token.isEmpty()) {
+            throw new RuntimeException("token is empty: " + body);
+        }
+
+        return token;
     }
 
 

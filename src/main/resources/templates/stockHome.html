@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.w3.org/1999/xhtml" lang="ko">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -13,9 +13,12 @@
 <div class="page">
 
   <!-- 헤더 -->
-  <header class="header">
-    <div th:replace="~{fragments/header :: header}"></div>
-  </header>
+  <div class="page-inner">  <!-- ← 추가 -->
+    <header class="header">
+      <div th:replace="~{fragments/header :: header}"></div>
+    </header>
+  </div>
+
 
 
   <!-- 테이블: thead 고정 + tbody 스크롤 -->
@@ -85,7 +88,45 @@
       </div>
     </div>
   </div>
+  <div class="middle-box">
+    <div class="seed-info"  sec:authorize="isAnonymous()" >
+      가입 시 초기 투자금&nbsp;&nbsp;<span>10,000,000원</span>이 지급됩니다.
+    </div>
+    <div class="seed-info"  sec:authorize="isAuthenticated()" >
+      총 투자금:&nbsp;<span sec:authorize="isAuthenticated()" id="seed"></span>원
+    </div>
+  </div>
+  <div class="bottom-box">
+    <div class="tab-container">
+      <div class="tab-menu">
+        <button class="tab-btn active" data-tab="holding">보유주식</button>
+        <button class="tab-btn" data-tab="history">거래내역</button>
+        <!--<button class="tab-btn" data-tab="watch">관심종목</button>-->
+      </div>
+      <div class="tab-content">
+        <div id="holding" class="tab-pane active">
+          <div class="empty-state">
+            보유 종목이 없습니다.
+          </div>
+        </div>
+
+        <div id="history" class="tab-pane">
+          <div class="empty-state">
+            거래 내역이 없습니다.
+          </div>
+        </div>
+
+<!--        <div id="watch" class="tab-pane">
+          <div class="empty-state">
+            관심 종목을 추가하세요
+          </div>
+        </div>-->
+      </div>
+    </div>
+  </div>
+
 </div>
+
 
 <script th:inline="none">
   const REFRESH_SEC = 30;
@@ -175,6 +216,30 @@
     wrap.classList.add('flash');
   }
 
+  fetch('/api/member/info')
+    .then(r => r.json())
+    .then(data => {
+        const seed = parseInt(data.seed);
+        document.getElementById('seed').textContent = seed.toLocaleString('ko-KR');
+    });
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+
+        document.querySelectorAll('.tab-btn')
+            .forEach(b => b.classList.remove('active'));
+
+        document.querySelectorAll('.tab-pane')
+            .forEach(p => p.classList.remove('active'));
+
+        btn.classList.add('active');
+
+        document
+            .getElementById(btn.dataset.tab)
+            .classList.add('active');
+    });
+  });
+
   function connectSSE() {
     statusDot.className = 'dot loading';
     statusText.textContent = '연결 중...';
@@ -191,6 +256,159 @@
       lastUpdateText.textContent = new Date(payload.updatedAt).toLocaleTimeString('ko-KR');
     });
 
+    // 탭 클릭 시 데이터 로드
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(btn.dataset.tab).classList.add('active');
+
+            // ← 추가
+            if (btn.dataset.tab === 'holding') loadHolding();
+            if (btn.dataset.tab === 'history') loadHistory();
+        });
+    });
+
+    function loadHolding() {
+        fetch('/api/order/holding')
+            .then(r => {
+              if(r.url.includes('/login')) {
+                document.getElementById('holding').innerHTML = '<div class="empty-state">로그인이 필요합니다.</div>';
+                return null;
+              }
+              return r.json();
+            })
+            .then(list => {
+                if(!list) return;
+                const el = document.getElementById('holding');
+                if (!list || list.length === 0) {
+                    el.innerHTML = '<div class="empty-state">보유 종목이 없습니다.</div>';
+                    return;
+                }
+                el.innerHTML = `
+                    <table class="order-table">
+                        <thead>
+                            <tr>
+                                <th>종목명</th>
+                                <th class="right">수량</th>
+                                <th class="right">현재가</th>
+                                <th class="right">수익률</th>
+                                <th class="right">평가손익</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${list.map(o => {
+                                const dir = o.profitRate > 0 ? 'up' : o.profitRate < 0 ? 'down' : 'flat';
+                                const sign = o.profitRate > 0 ? '▲' : o.profitRate < 0 ? '▼' : '';
+                                return `
+                                <tr class="clickable-row"
+                                    data-code = "${o.stockCode}"
+                                    data-name = "${encodeURIComponent(o.stockName)}">
+                                    <td>
+                                        <div class="stock-name">${o.stockName}</div>
+                                    </td>
+                                    <td class="right">${o.totalQuantity}주</td>
+                                    <td class="right">${o.totalValue.toLocaleString()}원</td>
+                                    <td class="right ${dir}">${sign}${Math.abs(o.profitRate).toFixed(2)}%</td>
+                                    <td class="right ${dir}">
+                                        ${o.profitValue > 0 ? '+' : ''}${o.profitValue.toLocaleString()}원
+                                    </td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>`;
+
+                    el.querySelectorAll('.clickable-row').forEach(row => {
+                        row.addEventListener('click', () => {
+                            window.location.href = `/stock/${row.dataset.code}?name=${row.dataset.name}`;
+                        });
+                    });
+
+            });
+    }
+
+    function loadHistory() {
+        fetch('/api/order/history')
+            .then(r => {
+              if(r.url.includes('/login')) {
+                document.getElementById('history').innerHTML = '<div class="empty-state">로그인이 필요합니다.</div>';
+                return;
+              }
+              return r.json();
+            })
+            .then(list => {
+                if(!list) return;
+                const el = document.getElementById('history');
+                if (!list || list.length === 0) {
+                    el.innerHTML = '<div class="empty-state">거래 내역이 없습니다.</div>';
+                    return;
+                }
+                el.innerHTML = `
+                    <table class="order-table">
+                        <thead>
+                            <tr>
+                                <th>종목명</th>
+                                <th class="right">구분</th>
+                                <th class="right">수량</th>
+                                <th class="right">단가</th>
+                                <th class="right">상태</th>
+                                <th class="right">주문시간</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${list.map(o => `
+                            <tr>
+                                <td>
+                                    <div class="stock-name">${o.stockName}</div>
+                                    <div class="stock-code">${o.stockCode}</div>
+                                </td>
+                                <td class="right">
+                                    <span class="badge ${o.orderType === 'BUY' ? 'buy' : 'sell'}">
+                                        ${o.orderType === 'BUY' ? '매수' : '매도'}
+                                    </span>
+                                </td>
+                                <td class="right">${o.quantity}주</td>
+                                <td class="right">${o.price.toLocaleString()}원</td>
+                                <td class="right">
+                                    <span class="status ${o.orderStatus.toLowerCase()}">
+                                        ${statusLabel(o.orderStatus)}
+                                    </span>
+                                </td>
+                                <td class="right">${fmtDateTime(o.createdAt)}</td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>`;
+
+            })
+            .catch(() => {
+                document.getElementById('history').innerHTML = '<div class="empty-state">오류가 발생했습니다.</div>';
+            });
+
+
+
+    }
+
+    function statusLabel(status) {
+        const map = {
+            'PENDING': '대기',
+            'MATCHED': '체결',
+            'PARTIAL': '부분체결',
+            'CANCELLED': '취소',
+            'FAILED': '실패'
+        };
+        return map[status] || status;
+    }
+
+    function fmtDateTime(str) {
+        if (!str) return '-';
+        const d = new Date(str);
+        return d.toLocaleDateString('ko-KR') + ' ' + d.toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit'});
+    }
+
+    // 페이지 로드 시 보유주식 먼저 로드
+    loadHolding();
+
     es.onerror = () => {
       statusDot.className = 'dot error';
       statusText.textContent = '연결 끊김 · 재연결 중...';
@@ -201,5 +419,6 @@
 
   connectSSE();
 </script>
+<script src="/js/alarm.js"></script>
 </body>
 </html>
