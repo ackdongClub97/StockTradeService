@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.w3.org/1999/xhtml" lang="ko">
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -13,7 +13,7 @@
 
 <div id="stockData1" th:data-code="${code}"></div>
 <div id="stockData2" th:data-name="${name}"></div>
-<input id="stockData3" style="display:none;"></input>
+<input id="stockData3" style="display:none;">
 
 <div class="page">
 
@@ -39,8 +39,11 @@
             </div>
         </div>
 
+        <div class="seed-info"  sec:authorize="isAnonymous()" >
+            가입 시 초기 투자금&nbsp;&nbsp;<span>10,000,000원</span>이 지급됩니다.
+        </div>
         <!-- 매수/매도 -->
-        <div class="trade-header">
+        <div class="trade-header" sec:authorize="isAuthenticated()">
             <button class="buy-btn" onclick="openModal('buy')">매수</button>
             <button class="sell-btn" onclick="openModal('sell')">매도</button>
         </div>
@@ -58,6 +61,8 @@
                     <div class="stock-name" th:text="${name}">-</div>
                     <div class="stock-price" id="stockPrice">-</div>
                 </div>
+
+                <div class="max-qty-info" id="maxQtyInfo"></div>
 
                 <div class="input-group">
                     <label>주문 수량</label>
@@ -187,9 +192,13 @@
       });
 
 
+
+    <!--              모달창              -->
     let modalStockPrice = 0;
     let orderType = '';
-    <!--              모달창              -->
+    let seed = 0;
+    let maxQty = 0;
+
     function openModal(type) {
         const now = new Date();
         const formatted = now.toLocaleString('ko-KR');
@@ -198,7 +207,6 @@
         const modal = document.getElementById('tradeModal');
         const title = document.getElementById('modalTitle');
         const submitBtn = document.querySelector('.submit-btn');
-
         const price = document.getElementById('stockPrice');
 
         const clickPrice = parseInt(document.getElementById('stockData3').value || 0);
@@ -210,10 +218,29 @@
             title.innerText = '매수 주문';
             submitBtn.innerText = '매수하기';
             submitBtn.style.background = 'linear-gradient(135deg, #ff3b5c, #ff6b81)';
+
+            // 매수 가능 수량 계산
+            fetch('/api/member/info')
+            .then(r => r.json())
+            .then(data => {
+                seed = parseInt(data.seed);
+                const maxQty = modalStockPrice > 0 ? Math.floor(seed / modalStockPrice) : 0;
+                document.getElementById('maxQtyInfo').textContent =
+                    `보유 투자금: ${seed.toLocaleString()}원 / 최대 ${maxQty}주 매수 가능`;
+            });
+
         } else if (type == 'sell') {
             title.innerText = '매도 주문';
             submitBtn.innerText = '매도하기';
             submitBtn.style.background = 'linear-gradient(135deg, #2979ff, #5393ff)';
+
+            // 매도 가능 수량 계산
+            fetch(`/api/order/memberStockInfo?stockCode=${code}`)
+            .then(r => r.json())
+            .then(data => {
+                maxQty = data.totalQuantity;
+                document.getElementById('maxQtyInfo').textContent = `최대 ${maxQty}주 매도 가능`;
+            });
         }
 
         modal.style.display = 'block';
@@ -243,27 +270,47 @@
 });
 
     const submitBtn = document.getElementById("submit-btn");
-
     submitBtn.addEventListener('click', () => {
+        if(orderType == 'buy' && seed < parseInt(orderPrice.value)) {
+            alert('보유 금액이 부족합니다.');
+            return;
+        }
+
+        if(orderType == 'sell' && parseInt(document.getElementById('quantity').value) > parseInt(maxQty)) {
+            alert('보유 주식 보다 매도 주식 수가 큽니다.');
+            return;
+        }
+
         if (parseInt(quantity.value) < 1 || quantity.value === '0') {
             alert('수량을 입력하세요.');
             return;
         }
 
+        const action = orderType == 'buy' ? '매수' : '매도';
+        const confirmed = confirm(
+            `${action} 주문을 확정하시겠습니까?\n\n` +
+            `종목: ${name}\n` +
+            `수량: ${quantity.value}주\n` +
+            `단가: ${modalStockPrice.toLocaleString()}원\n` +
+            `총액: ${parseInt(orderPrice.value).toLocaleString()}원`
+        );
+
+        if (!confirmed) return;
+
         fetch('/api/order/create', {
             method: 'POST',
+            credentials: 'include',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 stockCode: code,
                 stockName: name,
                 orderType: orderType == 'buy' ? 'BUY' : 'SELL',
                 quantity: quantity.value,
-                price : modalStockPrice, /* 단가 */
-                memberId : memberId
+                price : modalStockPrice /* 단가 */
             })
         }).then(r => r.json())
         .then(data => {
-            alert('주문완료 : 주문번호 : ${data.orderId}');
+            alert('주문완료 : 주문번호 :' + data.orderId);
             closeModal();
         }).catch(() => {
             alert('주문 처리 중 오류가 발생했습니다.');
@@ -272,5 +319,6 @@
 
     connectSSE();
 </script>
+<script src="/js/alarm.js"></script>
 </body>
 </html>

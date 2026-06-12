@@ -12,7 +12,6 @@ import java.time.LocalDateTime;
 @Table(name = "orders")
 public class Order {
     @Id
-    @GeneratedValue
     private String orderId; // ORD20260519001
 
     private String memberId;
@@ -21,11 +20,14 @@ public class Order {
 
     private String stockName;
 
+    @Enumerated(EnumType.STRING)
     private OrderType orderType;
-
+    @Enumerated(EnumType.STRING)
     private OrderStatus orderStatus;
 
     private int price;
+
+    private int matchedPrice;        // 체결 수량
 
     private int quantity;               // 주문 수량
 

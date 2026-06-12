@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import stockOrder.stockTrade.member.CustomerDetailsService;
@@ -36,8 +37,9 @@ public class SecurityConfig {
                                 "/api/rank/**",
                                 "/api/news/**",
                                 "/api/stock/**",
-                                "/api/volume/**"
-                                ,"/h2-console/**"
+                                "/api/stock/*/stream/**",
+                                "/api/volume/**",
+                                "/h2-console/**"
                         )
                         .permitAll()
                         .anyRequest().authenticated()
@@ -53,6 +55,8 @@ public class SecurityConfig {
                 .logout(logout -> logout
                         .logoutUrl("/logout")
                         .logoutSuccessUrl("/login")
+                ).sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
                 );
 
         return http.build();

@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,8 +16,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
-import stockOrder.stockTrade.order.Order;
-import stockOrder.stockTrade.order.OrderResponse;
 import stockOrder.stockTrade.stock.Stock;
 import stockOrder.stockTrade.stock.StockRepository;
 import stockOrder.stockTrade.token.TokenService;
@@ -29,10 +26,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Timer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeUnit;
 
 
 @Service
@@ -144,7 +139,6 @@ public class KisService {
     }
 
     public Mono<List<ResponseOutputDTO>> getVolumeRank(String timeChk) {
-
         HttpHeaders headers = createVolumeRankHttpHeaders();
         String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
 
@@ -182,22 +176,6 @@ public class KisService {
 
     @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
     public void refreshRank() {
-
-        /*if(!isMarketOpen()) {
-            if(!saveToday && !cachedData.isEmpty()) {
-                saveStockEndData(List.copyOf(cachedData));
-                saveToday = true;
-                log.info("장마감 최종 랭킹 저장");
-            }
-
-            if(!cachedData.isEmpty()) {
-                rankSink.tryEmitNext(List.copyOf(cachedData));
-            }
-            return;
-        }
-
-        // 장열리면 초기화
-        saveToday = false;*/
 
         // 시간별로 장 구분
         String timeChk;
@@ -333,7 +311,7 @@ public class KisService {
         if(detailSink.isEmpty()) return;
 
         if(!isMarketOpen()) {
-            log.info("장 마감 시간 detail 조회 스킵");
+            /*log.info("장 마감 시간 detail 조회 스킵");*/
             return;
         }
         log.info("refresh detail");
@@ -351,7 +329,7 @@ public class KisService {
                 ));
     }
 
-    private boolean isMarketOpen() {
+    public boolean isMarketOpen() {
         LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
         LocalTime open = LocalTime.of(9, 0);
         LocalTime close = LocalTime.of(15, 30);
@@ -362,7 +340,7 @@ public class KisService {
         return isWeekday && now.isAfter(open) && now.isBefore(close);
     }
 
-    private boolean isAfterMarket() {
+    public boolean isAfterMarket() {
         LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
         LocalTime open = LocalTime.of(15, 30);
         LocalTime close = LocalTime.of(18, 0);
@@ -425,58 +403,12 @@ public class KisService {
         }
     }
 
-
-    // 주식 주문
-    public Mono<OrderResponse> submitOrder(Order order) {
-        return webClient.post()
-                .uri("/uapi/domestic-stock/v1/trading/order-cash")
-                .headers(h -> {
-                    h.setBearerAuth(token);
-                    h.set("appkey", appkey);
-                    h.set("appsecret", appsecret);
-                    h.set("tr_id", order.getOrderType().equals("BUY")
-                            ? "VTTC0802U"   // 모의투자 매수
-                            : "VTTC0801U"); // 모의투자 매도
-                    h.set("custtype", "P");
-                })
-                .bodyValue(Map.of(
-                        "CANO",        "계좌번호 앞 8자리",
-                        "ACNT_PRDT_CD","계좌번호 뒤 2자리",
-                        "PDNO",        order.getStockCode(),   // 종목코드
-                        "ORD_DVSN",    "00",                   // 지정가
-                        "ORD_QTY",     String.valueOf(order.getQuantity()),  // 주문수량
-                        "ORD_UNPR",    String.valueOf(order.getPrice()) // 주문단가
-                ))
-                .retrieve()
-                .bodyToMono(String.class)
-                .flatMap(this::parseOrderResult);
+    public ResponseOutputDTO getCachedStockData(String stockCode) {
+        return cachedStockData.get(stockCode);
     }
 
-
-    private Mono<OrderResponse> parseOrderResult(String response) {
-        try{
-            JsonNode node = objectMapper.readTree(response);
-            OrderResponse orderResponse = new OrderResponse();
-
-            orderResponse.setRtCd(node.get("rt_cd").asText());
-            orderResponse.setMsg(node.get("msg1").asText());
-
-            JsonNode output = node.get("output");
-            if(output != null) {
-                orderResponse.setOrdNo(output.get("KRX_FWDG_ORD_ORGNO").asText());
-                orderResponse.setOrdTime(output.get("ORD_TMD").asText());
-            }
-
-            if(!"0".equals(orderResponse.getRtCd())) {
-                return Mono.error(new RuntimeException(orderResponse.getMsg()));
-            }
-
-            return Mono.just(orderResponse);
-        }catch (Exception e){
-            return Mono.error(e);
-        }
+    public void putCachedStockData(String stockCode, ResponseOutputDTO dto) {
+        cachedStockData.put(stockCode, dto);
     }
-
-
 
 }
