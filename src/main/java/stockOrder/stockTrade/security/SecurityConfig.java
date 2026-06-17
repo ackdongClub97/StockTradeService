@@ -1,5 +1,6 @@
 package stockOrder.stockTrade.security;
 
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +27,7 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .userDetailsService(userDetailService)
                 .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(
                                 "/login",
                                 "/join",
@@ -39,6 +41,7 @@ public class SecurityConfig {
                                 "/api/stock/**",
                                 "/api/stock/*/stream/**",
                                 "/api/volume/**",
+                                "/api/sse/**",
                                 "/h2-console/**"
                         )
                         .permitAll()
