@@ -476,3 +476,79 @@
     }
 
     .seed-info span { color: var(--accent); font-weight: 900; font-size: 17px; }
+
+
+    /*모바일*/
+    @media (max-width: 480px) {
+      .page {
+        padding: 12px 14px 32px;
+      }
+
+      /* 종목 요약 */
+      .stock-summary {
+        padding: 16px;
+        gap: 12px;
+      }
+
+      .stock-name-block .name {
+        font-size: 15px;
+      }
+
+      .current-price {
+        font-size: 22px;
+      }
+
+      /* 지표 그리드 */
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+
+      .stat-card {
+        padding: 10px 12px;
+      }
+
+      .stat-value {
+        font-size: 12px;
+      }
+
+      /* 매수/매도 버튼 */
+      .trade-header button {
+        padding: 11px;
+        font-size: 14px;
+      }
+
+      /* 모달 */
+      .modal-content {
+        width: calc(100% - 32px);
+        margin: 20% auto;
+        padding: 20px 16px;
+        gap: 14px;
+      }
+
+      .modal-top h2 {
+        font-size: 18px;
+      }
+
+      .stock-price {
+        font-size: 20px;
+      }
+
+      .input-group input {
+        font-size: 16px; /* iOS 자동 줌 방지 */
+        padding: 12px;
+      }
+
+      .submit-btn {
+        padding: 14px;
+        font-size: 15px;
+      }
+
+      /* 시드머니 */
+      .seed-info {
+        font-size: 13px;
+        height: auto;
+        padding: 10px 12px;
+      }
+
+      .seed-info span {

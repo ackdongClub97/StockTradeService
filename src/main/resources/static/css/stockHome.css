@@ -382,3 +382,81 @@
 
     .order-table td.up   { color: #ff3b5c; }
     .order-table td.down { color: #2979ff; }
+
+    /*모바일*/
+
+    @media (max-width: 480px) {
+      .page-width {
+        padding: 12px 14px 32px;
+      }
+
+      /* 시드머니 */
+      .seed-info {
+        font-size: 12px;
+        height: auto;
+        padding: 10px 12px;
+      }
+      .seed-info span {
+        font-size: 14px;
+      }
+
+      /* 랭킹 테이블 - 컬럼 정리 */
+      .stock-ranking-list {
+        padding: 8px 0 0;
+      }
+
+      col.c-rank  { width: 36px; }
+      col.c-name  { width: auto; }
+      col.c-price { width: 80px; }
+      col.c-rate  { width: 64px; }
+      col.c-vol   { display: none; width: 0; }
+      col.c-pvol  { display: none; width: 0; }
+
+      .col-vol,
+      .col-pvol { display: none; }
+
+      td, th {
+        padding: 6px 6px;
+        font-size: 11px;
+      }
+
+      .stock-name { font-size: 12px; }
+      .stock-code { font-size: 9px; }
+      .price      { font-size: 11px; }
+      .change     { font-size: 11px; }
+
+      /* 탭 */
+      .tab-btn {
+        padding: 10px 6px;
+        font-size: 12px;
+      }
+
+      .tab-content {
+        padding: 12px 8px;
+        overflow-x: auto; /* 테이블 가로 스크롤 */
+      }
+
+      /* 거래 내역 테이블 - 가로 스크롤로 해결 */
+      .order-table {
+        min-width: 560px; /* 테이블 최소 너비 고정 */
+      }
+
+      .order-table th,
+      .order-table td {
+        padding: 8px 8px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .badge {
+        font-size: 10px;
+        padding: 2px 6px;
+      }
+
+      /* 중단/하단 박스 */
+      .middle-box,
+      .bottom-box {
+        padding: 0 10px;
+        margin: 12px auto;
+      }
+    }

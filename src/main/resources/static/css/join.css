@@ -156,3 +156,48 @@
     }
     .bottom-link a { color: var(--accent); text-decoration: none; font-weight: 500; }
     .bottom-link a:hover { text-decoration: underline; }
+
+    /*모바일*/
+
+    @media (max-width: 480px) {
+      body {
+        padding: 24px 16px;
+        align-items: flex-start;
+      }
+
+      .container {
+        max-width: 100%;
+      }
+
+      .logo-wrap {
+        margin-bottom: 24px;
+      }
+
+      .logo-mark {
+        width: 48px; height: 48px;
+        font-size: 12px;
+      }
+
+      .logo-title {
+        font-size: 17px;
+      }
+
+      .card {
+        padding: 24px 20px;
+      }
+
+      .card-title {
+        font-size: 16px;
+        margin-bottom: 18px;
+      }
+
+      .input-group input {
+        font-size: 16px; /* iOS 자동 줌 방지 */
+        padding: 11px 12px;
+      }
+
+      .submit-btn {
+        font-size: 15px;
+        padding: 14px;
+      }
+    }

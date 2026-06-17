@@ -51,3 +51,29 @@
     .login_btn{ color: white; text-decoration: none; color: var(--text-dim);}
 
     .name {color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
+
+    /*모바일*/
+
+    @media (max-width: 480px) {
+      .header {
+        padding: 8px 14px;
+      }
+
+      .logo-mark {
+        width: 32px; height: 32px;
+        font-size: 10px;
+        border-radius: 8px;
+      }
+
+      .main-title {
+        font-size: 14px;
+      }
+
+      .sub-title {
+        font-size: 9px;
+      }
+
+      .name {
+        font-size: 11px;
+      }
+    }
