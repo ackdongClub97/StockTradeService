@@ -120,7 +120,7 @@ hantu-openapi:
 ## 🚀 배포
 - AWS EC2 (Ubuntu)
 - JAR 패키징 후 nohup 백그라운드 실행
-- prod 프로파일 분리 운영
+- prod 운영 파일 분리 운영
 
 ---
 
