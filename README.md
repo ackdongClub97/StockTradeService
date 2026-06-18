@@ -7,6 +7,25 @@
 
 🔗 **배포 주소**: http://mockst.duckdns.org:8080/stockHome
 
+## 🖥 화면 구성 (모바일 가능)
+
+### 📊 메인 화면 (주식 랭킹, 주식 거래 내역 & 수익률)
+<img width="1170" height="2140" alt="IMG_8533" src="https://github.com/user-attachments/assets/e4380f69-d8d6-424c-81fe-c6b47f20de3f" />
+
+
+### 📈 매수 / 매도
+<img width="1170" height="2102" alt="IMG_8534" src="https://github.com/user-attachments/assets/f9354310-a32b-4749-a583-6efda98ebb96" />
+<img width="1170" height="1540" alt="IMG_8535" src="https://github.com/user-attachments/assets/8b697562-47f0-45d2-a302-2bfe178b4324" />
+
+
+### 🔐 로그인
+<img width="1170" height="2051" alt="IMG_8531" src="https://github.com/user-attachments/assets/6d09941b-c473-4b39-9285-e34ed8fe8534" />
+
+
+### 📝 회원가입
+<img width="1170" height="2121" alt="IMG_8532" src="https://github.com/user-attachments/assets/7fedf9ff-962b-4dca-8c88-744eea0ee0cf" />
+
+
 ---
 
 ## 🛠 기술 스택
@@ -106,7 +125,7 @@ hantu-openapi:
 ---
 
 ## ⚠️ 주의사항
-- Access Token 만료 시 재발급 필요
+- Access Token 만료 시 재발급 필요 (24h)
 - 요청 헤더 필수 값: `Authorization`, `appkey`, `appsecret`, `tr_id`
 
 ---
