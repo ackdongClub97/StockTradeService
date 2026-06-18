@@ -5,7 +5,7 @@
 실무에서 경험하지 못한 JPA/Hibernate 기반 객체지향 설계와 이벤트 기반 아키텍처를 직접 체득하기 위해 시작했으며,  
 토큰 발급부터 시세 조회·주문·체결까지 실서비스에 가까운 흐름을 설계하고 AWS EC2에 배포하여 운영 경험까지 확보했습니다.
 
-🔗 **배포 주소**: http://mockst.duckdns.org:8080/stockHome
+🔗 **배포 주소**: (http://mockst.duckdns.org:8080/stockHome)
 
 ## 🖥 화면 구성 (모바일 가능)
 
