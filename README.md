@@ -135,9 +135,6 @@ src/main/java
 
 - Access Token 만료 시 재발급 필요 (24h)
 - 요청 헤더 필수 값: `Authorization`, `appkey`, `appsecret`, `tr_id`
+- 네이버 뉴스 API 사용을 위해 Client ID 및 Client Secret 키 필요
 
 ---
-
-## 📄 라이선스
-
-개인 학습 및 포트폴리오 용도
