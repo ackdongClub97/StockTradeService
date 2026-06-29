@@ -12,7 +12,7 @@
 
 ## 🏗 시스템 아키텍처
 
-![Architecture](https://raw.githubusercontent.com/ackdongClub97/StockTradeService/main/architecture.svg)
+![Architecture](https://github.com/ackdongClub97/StockTradeService/blob/main/architecture.svg)
 
 ## 🖥 화면 구성 (모바일 가능)
 
