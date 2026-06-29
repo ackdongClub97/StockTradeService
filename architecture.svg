@@ -1,0 +1,199 @@
+<svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" font-family="Arial, sans-serif">
+
+  <!-- Background -->
+  <rect width="900" height="620" fill="#f8f9fa" rx="12"/>
+
+  <!-- Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">📈 StockTradeService 시스템 아키텍처</text>
+
+  <!-- ─────────────────────────────────── -->
+  <!-- Layer 1: Client -->
+  <!-- ─────────────────────────────────── -->
+  <rect x="30" y="60" width="840" height="70" fill="#e8f4fd" rx="8" stroke="#90caf9" stroke-width="1.5"/>
+  <text x="50" y="82" font-size="11" font-weight="bold" fill="#1565c0">CLIENT</text>
+
+  <!-- Browser -->
+  <rect x="160" y="72" width="110" height="46" fill="#ffffff" rx="6" stroke="#90caf9" stroke-width="1.2"/>
+  <text x="215" y="92" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">🌐 Browser</text>
+  <text x="215" y="108" text-anchor="middle" font-size="10" fill="#555">Thymeleaf UI</text>
+
+  <!-- Mobile -->
+  <rect x="300" y="72" width="110" height="46" fill="#ffffff" rx="6" stroke="#90caf9" stroke-width="1.2"/>
+  <text x="355" y="92" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">📱 Mobile</text>
+  <text x="355" y="108" text-anchor="middle" font-size="10" fill="#555">반응형 지원</text>
+
+  <!-- ─────────────────────────────────── -->
+  <!-- Layer 2: Spring Boot App -->
+  <!-- ─────────────────────────────────── -->
+  <rect x="30" y="160" width="840" height="200" fill="#f3e5f5" rx="8" stroke="#ce93d8" stroke-width="1.5"/>
+  <text x="50" y="182" font-size="11" font-weight="bold" fill="#6a1b9a">SPRING BOOT APPLICATION (AWS EC2 · Ubuntu)</text>
+
+  <!-- Security -->
+  <rect x="50" y="192" width="130" height="56" fill="#ffffff" rx="6" stroke="#ce93d8" stroke-width="1.2"/>
+  <text x="115" y="212" text-anchor="middle" font-size="11" font-weight="bold" fill="#6a1b9a">🔐 Security</text>
+  <text x="115" y="228" text-anchor="middle" font-size="10" fill="#555">Spring Security</text>
+  <text x="115" y="241" text-anchor="middle" font-size="10" fill="#555">JWT / Session</text>
+
+  <!-- Controller -->
+  <rect x="200" y="192" width="130" height="56" fill="#ffffff" rx="6" stroke="#ce93d8" stroke-width="1.2"/>
+  <text x="265" y="212" text-anchor="middle" font-size="11" font-weight="bold" fill="#6a1b9a">🎮 Controller</text>
+  <text x="265" y="228" text-anchor="middle" font-size="10" fill="#555">REST API</text>
+  <text x="265" y="241" text-anchor="middle" font-size="10" fill="#555">SSE Endpoint</text>
+
+  <!-- Service -->
+  <rect x="350" y="192" width="130" height="56" fill="#ffffff" rx="6" stroke="#ce93d8" stroke-width="1.2"/>
+  <text x="415" y="212" text-anchor="middle" font-size="11" font-weight="bold" fill="#6a1b9a">⚙️ Service</text>
+  <text x="415" y="228" text-anchor="middle" font-size="10" fill="#555">OrderService</text>
+  <text x="415" y="241" text-anchor="middle" font-size="10" fill="#555">MatchingService</text>
+
+  <!-- Kafka Producer/Consumer -->
+  <rect x="500" y="192" width="140" height="56" fill="#fff8e1" rx="6" stroke="#ffca28" stroke-width="1.5"/>
+  <text x="570" y="212" text-anchor="middle" font-size="11" font-weight="bold" fill="#f57f17">📨 Kafka</text>
+  <text x="570" y="228" text-anchor="middle" font-size="10" fill="#555">Producer / Consumer</text>
+  <text x="570" y="241" text-anchor="middle" font-size="10" fill="#555">order-topic</text>
+
+  <!-- Spring Batch -->
+  <rect x="660" y="192" width="185" height="56" fill="#e8f5e9" rx="6" stroke="#a5d6a7" stroke-width="1.5"/>
+  <text x="752" y="212" text-anchor="middle" font-size="11" font-weight="bold" fill="#2e7d32">🔄 Spring Batch</text>
+  <text x="752" y="228" text-anchor="middle" font-size="10" fill="#555">30초 주기 재시도</text>
+  <text x="752" y="241" text-anchor="middle" font-size="10" fill="#555">PENDING / PARTIAL 처리</text>
+
+  <!-- Order State Machine -->
+  <rect x="50" y="268" width="795" height="76" fill="#fce4ec" rx="6" stroke="#f48fb1" stroke-width="1.2"/>
+  <text x="447" y="286" text-anchor="middle" font-size="11" font-weight="bold" fill="#880e4f">📊 주문 상태 머신 (Order State Machine)</text>
+
+  <rect x="70" y="294" width="90" height="36" fill="#ffffff" rx="5" stroke="#f48fb1" stroke-width="1"/>
+  <text x="115" y="317" text-anchor="middle" font-size="11" font-weight="bold" fill="#c62828">PENDING</text>
+
+  <text x="185" y="317" text-anchor="middle" font-size="16" fill="#880e4f">→</text>
+
+  <rect x="205" y="294" width="90" height="36" fill="#ffffff" rx="5" stroke="#f48fb1" stroke-width="1"/>
+  <text x="250" y="317" text-anchor="middle" font-size="11" font-weight="bold" fill="#2e7d32">MATCHED</text>
+
+  <text x="318" y="317" text-anchor="middle" font-size="14" fill="#880e4f">/</text>
+
+  <rect x="335" y="294" width="90" height="36" fill="#ffffff" rx="5" stroke="#f48fb1" stroke-width="1"/>
+  <text x="380" y="317" text-anchor="middle" font-size="11" font-weight="bold" fill="#e65100">PARTIAL</text>
+
+  <text x="448" y="317" text-anchor="middle" font-size="14" fill="#880e4f">/</text>
+
+  <rect x="465" y="294" width="100" height="36" fill="#ffffff" rx="5" stroke="#f48fb1" stroke-width="1"/>
+  <text x="515" y="317" text-anchor="middle" font-size="11" font-weight="bold" fill="#555">CANCELLED</text>
+
+  <text x="588" y="317" text-anchor="middle" font-size="14" fill="#880e4f">/</text>
+
+  <rect x="605" y="294" width="90" height="36" fill="#ffffff" rx="5" stroke="#f48fb1" stroke-width="1"/>
+  <text x="650" y="317" text-anchor="middle" font-size="11" font-weight="bold" fill="#b71c1c">FAILED</text>
+
+  <!-- PARTIAL → PENDING 재시도 표시 -->
+  <text x="730" y="305" font-size="10" fill="#880e4f">PARTIAL →</text>
+  <text x="730" y="320" font-size="10" fill="#880e4f">PENDING 재시도</text>
+  <text x="730" y="335" font-size="10" fill="#880e4f">(Batch 처리)</text>
+
+  <!-- ─────────────────────────────────── -->
+  <!-- Layer 3: External / DB -->
+  <!-- ─────────────────────────────────── -->
+  <rect x="30" y="388" width="840" height="100" fill="#e8eaf6" rx="8" stroke="#9fa8da" stroke-width="1.5"/>
+  <text x="50" y="408" font-size="11" font-weight="bold" fill="#283593">EXTERNAL / DATA LAYER</text>
+
+  <!-- KIS API -->
+  <rect x="50" y="416" width="150" height="56" fill="#ffffff" rx="6" stroke="#9fa8da" stroke-width="1.2"/>
+  <text x="125" y="438" text-anchor="middle" font-size="11" font-weight="bold" fill="#283593">🏦 KIS Open API</text>
+  <text x="125" y="454" text-anchor="middle" font-size="10" fill="#555">현재가 / 종가 조회</text>
+  <text x="125" y="467" text-anchor="middle" font-size="10" fill="#555">WebClient 비동기</text>
+
+  <!-- Naver API -->
+  <rect x="220" y="416" width="150" height="56" fill="#ffffff" rx="6" stroke="#9fa8da" stroke-width="1.2"/>
+  <text x="295" y="438" text-anchor="middle" font-size="11" font-weight="bold" fill="#283593">📰 Naver News API</text>
+  <text x="295" y="454" text-anchor="middle" font-size="10" fill="#555">종목 뉴스 조회</text>
+  <text x="295" y="467" text-anchor="middle" font-size="10" fill="#555">Client ID / Secret</text>
+
+  <!-- H2 DB -->
+  <rect x="390" y="416" width="150" height="56" fill="#ffffff" rx="6" stroke="#9fa8da" stroke-width="1.2"/>
+  <text x="465" y="438" text-anchor="middle" font-size="11" font-weight="bold" fill="#283593">🗄️ H2 Database</text>
+  <text x="465" y="454" text-anchor="middle" font-size="10" fill="#555">File Mode 영속성</text>
+  <text x="465" y="467" text-anchor="middle" font-size="10" fill="#555">JPA / Hibernate ORM</text>
+
+  <!-- Kafka Broker -->
+  <rect x="560" y="416" width="140" height="56" fill="#fff8e1" rx="6" stroke="#ffca28" stroke-width="1.5"/>
+  <text x="630" y="438" text-anchor="middle" font-size="11" font-weight="bold" fill="#f57f17">📨 Kafka Broker</text>
+  <text x="630" y="454" text-anchor="middle" font-size="10" fill="#555">order-topic</text>
+  <text x="630" y="467" text-anchor="middle" font-size="10" fill="#555">비동기 메시징</text>
+
+  <!-- AWS EC2 -->
+  <rect x="720" y="416" width="130" height="56" fill="#fff3e0" rx="6" stroke="#ffb74d" stroke-width="1.5"/>
+  <text x="785" y="438" text-anchor="middle" font-size="11" font-weight="bold" fill="#e65100">☁️ AWS EC2</text>
+  <text x="785" y="454" text-anchor="middle" font-size="10" fill="#555">Ubuntu Server</text>
+  <text x="785" y="467" text-anchor="middle" font-size="10" fill="#555">nohup 배포</text>
+
+  <!-- ─────────────────────────────────── -->
+  <!-- 연결 화살표 -->
+  <!-- ─────────────────────────────────── -->
+
+  <!-- Client → Controller -->
+  <line x1="215" y1="118" x2="215" y2="192" stroke="#90caf9" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="215,192 210,182 220,182" fill="#90caf9"/>
+
+  <line x1="355" y1="118" x2="300" y2="192" stroke="#90caf9" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="300,192 295,182 305,182" fill="#90caf9"/>
+
+  <!-- Controller → Service -->
+  <line x1="330" y1="220" x2="350" y2="220" stroke="#ce93d8" stroke-width="1.5"/>
+  <polygon points="350,220 342,215 342,225" fill="#ce93d8"/>
+
+  <!-- Service → Kafka -->
+  <line x1="480" y1="220" x2="500" y2="220" stroke="#ffca28" stroke-width="1.5"/>
+  <polygon points="500,220 492,215 492,225" fill="#ffca28"/>
+
+  <!-- Kafka → Batch -->
+  <line x1="640" y1="220" x2="660" y2="220" stroke="#a5d6a7" stroke-width="1.5"/>
+  <polygon points="660,220 652,215 652,225" fill="#a5d6a7"/>
+
+  <!-- App → External Layer -->
+  <line x1="125" y1="360" x2="125" y2="416" stroke="#9fa8da" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="125,416 120,406 130,406" fill="#9fa8da"/>
+
+  <line x1="295" y1="360" x2="295" y2="416" stroke="#9fa8da" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="295,416 290,406 300,406" fill="#9fa8da"/>
+
+  <line x1="465" y1="360" x2="465" y2="416" stroke="#9fa8da" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="465,416 460,406 470,406" fill="#9fa8da"/>
+
+  <line x1="570" y1="360" x2="630" y2="416" stroke="#ffca28" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="630,416 622,408 630,406" fill="#ffca28"/>
+
+  <!-- SSE 실시간 표시 -->
+  <text x="215" y="150" text-anchor="middle" font-size="9" fill="#1565c0">SSE 실시간</text>
+  <line x1="215" y1="155" x2="215" y2="162" stroke="#90caf9" stroke-width="1" stroke-dasharray="2,2"/>
+
+  <!-- ─────────────────────────────────── -->
+  <!-- Legend -->
+  <!-- ─────────────────────────────────── -->
+  <rect x="30" y="508" width="840" height="96" fill="#ffffff" rx="8" stroke="#dee2e6" stroke-width="1.2"/>
+  <text x="50" y="528" font-size="11" font-weight="bold" fill="#333">Legend</text>
+
+  <rect x="60" y="538" width="14" height="14" fill="#f3e5f5" stroke="#ce93d8" stroke-width="1.2" rx="2"/>
+  <text x="80" y="550" font-size="10" fill="#333">Spring Boot App</text>
+
+  <rect x="180" y="538" width="14" height="14" fill="#fff8e1" stroke="#ffca28" stroke-width="1.5" rx="2"/>
+  <text x="200" y="550" font-size="10" fill="#333">Kafka 메시징</text>
+
+  <rect x="300" y="538" width="14" height="14" fill="#e8f5e9" stroke="#a5d6a7" stroke-width="1.5" rx="2"/>
+  <text x="320" y="550" font-size="10" fill="#333">Spring Batch 재시도</text>
+
+  <rect x="450" y="538" width="14" height="14" fill="#fce4ec" stroke="#f48fb1" stroke-width="1.2" rx="2"/>
+  <text x="470" y="550" font-size="10" fill="#333">주문 상태 머신</text>
+
+  <rect x="590" y="538" width="14" height="14" fill="#e8f4fd" stroke="#90caf9" stroke-width="1.2" rx="2"/>
+  <text x="610" y="550" font-size="10" fill="#333">클라이언트</text>
+
+  <rect x="700" y="538" width="14" height="14" fill="#fff3e0" stroke="#ffb74d" stroke-width="1.5" rx="2"/>
+  <text x="720" y="550" font-size="10" fill="#333">AWS / 인프라</text>
+
+  <!-- 핵심 포인트 -->
+  <text x="50" y="576" font-size="10" fill="#555">💡 핵심 포인트:</text>
+  <text x="50" y="592" font-size="10" fill="#555">• 자체 주문 매칭 엔진 설계 (외부 API 위임 없음)</text>
+  <text x="340" y="592" font-size="10" fill="#555">• Kafka 기반 비동기 주문 처리</text>
+  <text x="580" y="592" font-size="10" fill="#555">• Spring Batch 30초 주기 미체결 재처리</text>
+
+</svg>

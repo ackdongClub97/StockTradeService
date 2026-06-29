@@ -10,6 +10,10 @@
 
 ---
 
+## 🏗 시스템 아키텍처
+
+![Architecture](https://raw.githubusercontent.com/ackdongClub97/StockTradeService/main/architecture.svg)
+
 ## 🖥 화면 구성 (모바일 가능)
 
 ### 📊 메인 화면 (주식 랭킹, 주식 거래 내역 & 수익률)
@@ -123,8 +127,6 @@ src/main/java
 | 문제 | 원인 | 해결 |
 |---|---|---|
 | SSE 비동기 dispatch 권한 오류 | Spring Security가 ASYNC dispatch 재검사 | `DispatcherType.ASYNC` permitAll 처리 |
-| CSS 404 오류 | Linux 파일시스템 대소문자 구분 | 파일명 소문자 통일 |
-| ERR_TOO_MANY_REDIRECTS | 로컬 파일 경로 하드코딩 | `application-prod.yml` 분리 및 `classpath:` 경로 수정 |
 | StaleObjectStateException | String ID에 `@GeneratedValue` 적용 | ID 생성 전략 수동 지정으로 변경 |
 | 미체결 주문 체결 안됨 | 매칭 로직이 Kafka Consumer에 혼재 | `MatchingService` 분리 + 30초 배치 재시도 구조로 재설계 |
 | 주문 API 인증 누락 | `permitAll` 범위 과도하게 설정 | 주문 엔드포인트 인증 필수로 수정 |
