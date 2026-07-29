@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.w3.org/1999/xhtml"
+      lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>마이페이지</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+    <link rel="stylesheet" href="/css/myPage.css"/>
+</head>
+<body>
+
+<div class="page">
+
+    <!-- 헤더 fragment -->
+    <div class="page-inner">
+        <header class="header">
+            <div th:replace="~{fragments/header :: header}"></div>
+        </header>
+    </div>
+
+    <div class="page-content">
+
+        <!-- 페이지 타이틀 -->
+        <div class="page-title">ACCOUNT</div>
+        <div class="page-heading">마이페이지</div>
+
+        <!-- 프로필 카드 -->
+        <div class="profile-card">
+            <div class="avatar">👤</div>
+            <div class="profile-info">
+                <div class="profile-name" id="profileName" th:text="${member.name}">사용자</div>
+                <div class="profile-email" th:text="${member.email}">user@example.com</div>
+                <div class="profile-badge">
+                    <span class="badge-dot"></span>
+                    일반 회원
+                </div>
+            </div>
+            <div class="profile-joined" th:text="'가입일 ' + ${member.joinDate}">
+                가입일 —
+            </div>
+        </div>
+
+        <!-- 탭 메뉴 -->
+        <div class="tab-menu">
+            <button class="tab-btn active" data-tab="stockTab">주식</button>
+            <button class="tab-btn" data-tab="profileTab">개인정보</button>
+        </div>
+
+        <!-- ── 주식 탭: seed, 보유 종목, 개인 포트폴리오 ── -->
+        <div id="stockTab" class="tab-pane active">
+
+            <!-- 투자 통계 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">💰</div>
+                    <div class="stat-label">투자금 (seed)</div>
+                    <div class="stat-value" id="statSeed"
+                         th:text="${#numbers.formatInteger(member.seed, 0, 'COMMA') + '원'}">—</div>
+                    <div class="stat-sub">현재 보유 현금</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📈</div>
+                    <div class="stat-label">평가금액</div>
+                    <div class="stat-value" id="statTotal">—</div>
+                    <div class="stat-sub">보유 종목 현재가 기준</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-label">총 손익</div>
+                    <div class="stat-value" id="statPnl">—</div>
+                    <div class="stat-sub" id="statPnlSub">수익률 — (보유종목 평가손익)</div>
+                </div>
+                <div class="stat-card clickable" id="monthlyPnlCard">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-label">이번달 매매차익</div>
+                    <div class="stat-value" id="statMonthlyPnl">—</div>
+                    <div class="stat-sub">클릭해서 기간별 보기 →</div>
+                </div>
+            </div>
+
+            <!-- 보유 종목 / 거래내역 데이터가 도착하기 전까지 표시 (비로그인 사용자에겐 안 보임) -->
+            <div class="section-loading" id="stockContentLoading" sec:authorize="isAuthenticated()">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">데이터를 불러오는 중...</div>
+            </div>
+
+            <div id="stockContent" style="display:none;">
+
+                <!-- 보유 종목 -->
+                <div class="section">
+                    <div class="section-header">
+                        <span class="section-title">보유 종목</span>
+                        <a class="section-action" href="/stockHome">전체 보기 →</a>
+                    </div>
+                    <div id="holdingArea">
+                        <div class="empty-state">보유 종목이 없습니다.</div>
+                    </div>
+                </div>
+
+                <!-- 최근 거래 내역 -->
+                <div class="section">
+                    <div class="section-header">
+                        <span class="section-title">최근 거래 내역</span>
+                    </div>
+                    <div id="historyArea">
+                        <div class="empty-state">거래 내역이 없습니다.</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 비로그인 -->
+            <div sec:authorize="isAnonymous()" class="empty-state">
+                로그인이 필요합니다.
+            </div>
+        </div>
+
+        <!-- ── 개인정보 탭: 닉네임/전화번호 변경, 탈퇴 ── -->
+        <div id="profileTab" class="tab-pane">
+
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-title">개인정보 변경</span>
+                </div>
+                <div class="profile-form">
+                    <div class="input-group">
+                        <label for="nameInput">닉네임</label>
+                        <input id="nameInput" type="text" th:value="${member.name}"/>
+                    </div>
+                    <div class="input-group">
+                        <label for="phoneInput">전화번호</label>
+                        <input id="phoneInput" type="tel" th:value="${member.phone}" placeholder="010-0000-0000"/>
+                    </div>
+                    <div class="field-msg" id="profileMsg"></div>
+                    <button type="button" class="submit-btn" id="profileSaveBtn">저장</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <span class="section-title">계정</span>
+                </div>
+                <div class="settings-list">
+
+                    <!-- 로그아웃: Spring Security POST /logout (CSRF는 SecurityConfig에서 비활성화돼 있어 토큰 불필요) -->
+                    <form th:action="@{/logout}" method="post">
+                        <button type="submit" class="settings-row">
+                            <div class="settings-label">
+                                <div class="settings-icon">🚪</div>
+                                <div>
+                                    <div class="settings-text">로그아웃</div>
+                                </div>
+                            </div>
+                            <span class="settings-arrow">›</span>
+                        </button>
+                    </form>
+
+                    <button type="button" class="settings-row danger" id="withdrawBtn">
+                        <div class="settings-label">
+                            <div class="settings-icon">⚠️</div>
+                            <div>
+                                <div class="settings-text">회원 탈퇴</div>
+                                <div class="settings-desc">탈퇴 시 로그인이 불가능해집니다</div>
+                            </div>
+                        </div>
+                        <span class="settings-arrow">›</span>
+                    </button>
+
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /page-content -->
+</div><!-- /page -->
+
+<!-- 매매차익 추이 모달 -->
+<div id="pnlModal" class="modal">
+    <div class="modal-content pnl-modal-content">
+        <div class="modal-top">
+            <h2>매매차익 추이</h2>
+            <span class="close-btn" id="pnlModalClose">✕</span>
+        </div>
+
+        <div class="pnl-range-picker">
+            <input type="date" id="pnlFrom"/>
+            <span>~</span>
+            <input type="date" id="pnlTo"/>
+            <button type="button" id="pnlSearchBtn" class="submit-btn pnl-search-btn">조회</button>
+        </div>
+
+        <div class="pnl-total" id="pnlTotal">—</div>
+        <div id="pnlChart" class="pnl-chart"></div>
+        <div class="pnl-empty" id="pnlEmpty" style="display:none;">해당 기간에 매매 내역이 없습니다.</div>
+    </div>
+</div>
+
+<script th:inline="none">
+    function fmtMoney(v) { return parseInt(v || 0).toLocaleString('ko-KR') + '원'; }
+    function fmtDateTime(str) {
+      if (!str) return '—';
+      const d = new Date(str);
+      return d.toLocaleDateString('ko-KR') + ' ' + d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    }
+    function statusLabel(s) {
+      return { PENDING: '대기', MATCHED: '체결', PARTIAL: '부분체결', CANCELLED: '취소', FAILED: '실패' }[s] || s;
+    }
+
+    function cancelOrder(orderId, onDone) {
+        if (!confirm('이 주문을 취소하시겠습니까?')) return;
+
+        fetch(`/api/order/${orderId}/cancel`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.message === 'SUCCESS') {
+                    if (onDone) onDone();
+                } else {
+                    alert(data.message || '취소에 실패했습니다.');
+                }
+            })
+            .catch(() => alert('취소 처리 중 오류가 발생했습니다.'));
+    }
+
+    /* ── 탭 전환 ── */
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(btn.dataset.tab).classList.add('active');
+        });
+    });
+
+    /* ── 보유 종목 실시간 스트림 (값만 갱신) ── */
+    let holdingRows = null;
+
+    function buildHoldingTable() {
+        const el = document.getElementById('holdingArea');
+        el.innerHTML = `
+          <table class="data-table">
+            <thead><tr>
+              <th>종목</th>
+              <th class="right">수량</th>
+              <th class="right">평가금액</th>
+              <th class="right">수익률</th>
+              <th class="right">평가손익</th>
+            </tr></thead>
+            <tbody id="holdingBody"></tbody>
+          </table>`;
+        holdingRows = new Map();
+    }
+
+    function createHoldingRow(tbody, stockCode, stockName) {
+        const row = document.createElement('tr');
+        row.className = 'clickable-row';
+        row.dataset.code = stockCode;
+        row.dataset.name = encodeURIComponent(stockName);
+        row.addEventListener('click', () => {
+            window.location.href = `/stock/${row.dataset.code}?name=${row.dataset.name}`;
+        });
+
+        const nameTd = document.createElement('td');
+        nameTd.innerHTML = `<div class="stock-name">${stockName}</div><div class="stock-code">${stockCode}</div>`;
+
+        const qtyTd    = document.createElement('td'); qtyTd.className    = 'right mono';
+        const priceTd  = document.createElement('td'); priceTd.className  = 'right mono';
+        const rateTd   = document.createElement('td'); rateTd.className   = 'right mono';
+        const profitTd = document.createElement('td'); profitTd.className = 'right mono';
+
+        row.append(nameTd, qtyTd, priceTd, rateTd, profitTd);
+        tbody.appendChild(row);
+
+        return { row, qtyTd, priceTd, rateTd, profitTd, last: {} };
+    }
+
+    /* ── 주식 탭 로딩 처리: 보유종목 + 거래내역 둘 다 도착해야 콘텐츠를 보여줌 ── */
+    let holdingReady = false, historyReady = false;
+
+    function markStockContentReady(which) {
+        if (which === 'holding') holdingReady = true;
+        if (which === 'history') historyReady = true;
+        if (!holdingReady || !historyReady) return;
+
+        const loading = document.getElementById('stockContentLoading');
+        const content = document.getElementById('stockContent');
+        if (loading) loading.style.display = 'none';
+        if (content) content.style.display = 'block';
+    }
+    // 안전장치: 연결이 안 되더라도 10초 뒤엔 화면을 보여줌 (비로그인은 애초에 데이터를 안 불러오므로 제외)
+    setTimeout(() => {
+        if (!window.__authenticated) return;
+        holdingReady = true;
+        historyReady = true;
+        markStockContentReady();
+    }, 10000);
+
+    function renderHolding(list) {
+        if (!list || list.length === 0) {
+            document.getElementById('holdingArea').innerHTML = '<div class="empty-state">보유 종목이 없습니다.</div>';
+            holdingRows = null;
+            updateSummary([]);
+            return;
+        }
+
+        const codes = list.map(o => o.stockCode);
+        const sameCodes = holdingRows && codes.length === holdingRows.size && codes.every(c => holdingRows.has(c));
+
+        if (!sameCodes) {
+            buildHoldingTable();
+            const tbody = document.getElementById('holdingBody');
+            list.forEach(o => holdingRows.set(o.stockCode, createHoldingRow(tbody, o.stockCode, o.stockName)));
+        }
+
+        list.forEach(o => {
+            const cell = holdingRows.get(o.stockCode);
+            if (!cell) return;
+
+            if (cell.last.totalQuantity !== o.totalQuantity) {
+                cell.qtyTd.textContent = `${o.totalQuantity.toLocaleString()}주`;
+                cell.last.totalQuantity = o.totalQuantity;
+            }
+            if (cell.last.totalValue !== o.totalValue) {
+                cell.priceTd.textContent = `${o.totalValue.toLocaleString()}원`;
+                cell.last.totalValue = o.totalValue;
+            }
+
+            const dir = o.profitRate > 0 ? 'up' : o.profitRate < 0 ? 'down' : 'flat';
+            const sign = o.profitRate > 0 ? '▲' : o.profitRate < 0 ? '▼' : '';
+            const rateText = `${sign}${Math.abs(o.profitRate).toFixed(2)}%`;
+            if (cell.last.rateText !== rateText) {
+                cell.rateTd.textContent = rateText;
+                cell.rateTd.className = `right mono ${dir}`;
+                cell.last.rateText = rateText;
+            }
+
+            const profitText = `${o.profitValue >= 0 ? '+' : ''}${o.profitValue.toLocaleString()}원`;
+            if (cell.last.profitText !== profitText) {
+                cell.profitTd.textContent = profitText;
+                cell.profitTd.className = `right mono ${dir}`;
+                cell.last.profitText = profitText;
+            }
+        });
+
+        updateSummary(list);
+    }
+
+    function updateSummary(list) {
+        let totalValue = 0, totalProfit = 0, totalCost = 0;
+        list.forEach(o => {
+            totalValue  += o.totalValue  || 0;
+            totalProfit += o.profitValue || 0;
+            totalCost   += (o.totalValue || 0) - (o.profitValue || 0);
+        });
+
+        const pnlRate = totalCost > 0 ? (totalProfit / totalCost * 100) : 0;
+        const dir = totalProfit > 0 ? 'up' : totalProfit < 0 ? 'down' : '';
+
+        document.getElementById('statTotal').textContent = fmtMoney(totalValue);
+        const pnlEl = document.getElementById('statPnl');
+        pnlEl.textContent = (totalProfit >= 0 ? '+' : '') + fmtMoney(totalProfit);
+        pnlEl.className = 'stat-value ' + dir;
+        const pnlSubEl = document.getElementById('statPnlSub');
+        pnlSubEl.textContent = (totalProfit > 0 ? '▲ ' : totalProfit < 0 ? '▼ ' : '') + Math.abs(pnlRate).toFixed(2) + '%';
+        pnlSubEl.className = 'stat-sub ' + dir;
+    }
+
+    let holdingConnected = false;
+
+    function connectHoldingSSE() {
+        if (holdingConnected || !window.__authenticated) return;
+        holdingConnected = true;
+
+        const holdingEs = new EventSource('/api/order/holding/stream');
+        holdingEs.addEventListener('holding', (e) => {
+            renderHolding(JSON.parse(e.data));
+            markStockContentReady('holding');
+        });
+        holdingEs.onerror = () => {
+            holdingEs.close();
+            holdingConnected = false;
+            setTimeout(connectHoldingSSE, 5000);
+        };
+    }
+    connectHoldingSSE();
+
+    /* ── seed 실시간 반영 (주문 체결 시 갱신) ── */
+    function refreshSeed() {
+        if (!window.__authenticated) return;
+        fetch('/api/member/info')
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+              if (!data) return;
+              document.getElementById('statSeed').textContent = fmtMoney(data.seed);
+          })
+          .catch(() => {});
+    }
+
+    /* ── 거래 내역 로드 ── */
+    function loadHistory() {
+        if (!window.__authenticated) return;
+        fetch('/api/order/history')
+          .then(r => r.ok ? r.json() : null)
+          .then(list => {
+            const el = document.getElementById('historyArea');
+            if (!el || !list) { markStockContentReady('history'); return; }
+            if (list.length === 0) {
+                el.innerHTML = '<div class="empty-state">거래 내역이 없습니다.</div>';
+                markStockContentReady('history');
+                return;
+            }
+
+            const recent = list.slice(0, 8);
+            el.innerHTML = `
+              <table class="data-table">
+                <thead><tr>
+                  <th>종목</th>
+                  <th class="right">구분</th>
+                  <th class="right">수량</th>
+                  <th class="right col-hide">단가</th>
+                  <th class="right">상태</th>
+                  <th class="right col-hide">일시</th>
+                  <th class="right"></th>
+                </tr></thead>
+                <tbody>
+                  ${recent.map(o => {
+                    const st = o.orderStatus.toLowerCase();
+                    return `<tr>
+                      <td><div class="stock-name">${o.stockName}</div><div class="stock-code">${o.stockCode}</div></td>
+                      <td class="right"><span class="badge ${o.orderType === 'BUY' ? 'buy' : 'sell'}">${o.orderType === 'BUY' ? '매수' : '매도'}</span></td>
+                      <td class="right mono">${o.quantity}주</td>
+                      <td class="right mono col-hide">${o.price.toLocaleString()}원</td>
+                      <td class="right"><span class="status-chip"><span class="s-dot ${st}"></span>${statusLabel(o.orderStatus)}</span></td>
+                      <td class="right col-hide dim-mono">${fmtDateTime(o.createdAt)}</td>
+                      <td class="right">
+                        ${(o.orderStatus === 'PENDING' || o.orderStatus === 'PARTIAL')
+                            ? `<button class="cancel-order-btn" data-order-id="${o.orderId}">취소</button>`
+                            : ''}
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>`;
+
+            el.querySelectorAll('.cancel-order-btn').forEach(btn => {
+                btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, loadHistory));
+            });
+
+            markStockContentReady('history');
+          })
+          .catch(() => markStockContentReady('history'));
+    }
+
+    /* ── 이번달 매매차익 (실현손익) ── */
+    function loadMonthlyPnl() {
+        if (!window.__authenticated) return;
+        fetch('/api/order/realized-pnl')
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+              if (!data) return;
+              const el = document.getElementById('statMonthlyPnl');
+              const dir = data.total > 0 ? 'up' : data.total < 0 ? 'down' : '';
+              el.textContent = (data.total >= 0 ? '+' : '') + fmtMoney(data.total);
+              el.className = 'stat-value ' + dir;
+          })
+          .catch(() => {});
+    }
+
+    /* 체결 알림이 오면(alarm.js의 order-result SSE와 별개로) 거래내역/seed/매매차익 갱신 - 탭이 열려있을 때 최신 상태 유지 */
+    if (window.__authenticated) {
+        const orderEs = new EventSource('/api/order/stream');
+        orderEs.addEventListener('order-result', () => {
+            loadHistory();
+            refreshSeed();
+            loadMonthlyPnl();
+        });
+    }
+
+    loadHistory();
+    refreshSeed();
+    loadMonthlyPnl();
+
+    /* ── 매매차익 추이 모달 ── */
+    const pnlModal = document.getElementById('pnlModal');
+
+    function openPnlModal() {
+        const today = new Date();
+        const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        document.getElementById('pnlFrom').value = firstOfMonth.toISOString().slice(0, 10);
+        document.getElementById('pnlTo').value = today.toISOString().slice(0, 10);
+        pnlModal.style.display = 'block';
+        searchPnl();
+    }
+
+    function closePnlModal() {
+        pnlModal.style.display = 'none';
+    }
+
+    document.getElementById('monthlyPnlCard').addEventListener('click', openPnlModal);
+    document.getElementById('pnlModalClose').addEventListener('click', closePnlModal);
+    document.getElementById('pnlSearchBtn').addEventListener('click', searchPnl);
+    pnlModal.addEventListener('click', (e) => { if (e.target === pnlModal) closePnlModal(); });
+
+    function searchPnl() {
+        const from = document.getElementById('pnlFrom').value;
+        const to = document.getElementById('pnlTo').value;
+        if (!from || !to) return;
+
+        fetch(`/api/order/realized-pnl?from=${from}&to=${to}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+              if (!data) return;
+              const totalEl = document.getElementById('pnlTotal');
+              const dir = data.total > 0 ? 'up' : data.total < 0 ? 'down' : 'flat';
+              const sign = data.total > 0 ? '▲' : data.total < 0 ? '▼' : '';
+              totalEl.textContent = `${sign} ${data.total >= 0 ? '+' : ''}${data.total.toLocaleString()}원`;
+              totalEl.className = 'pnl-total ' + dir;
+
+              renderPnlChart(data.series);
+          })
+          .catch(() => {});
+    }
+
+    function renderPnlChart(series) {
+        const container = document.getElementById('pnlChart');
+        const emptyEl = document.getElementById('pnlEmpty');
+
+        const hasAny = series.some(d => d.pnl !== 0);
+        if (!hasAny) {
+            container.style.display = 'none';
+            emptyEl.style.display = 'block';
+            return;
+        }
+        container.style.display = 'block';
+        emptyEl.style.display = 'none';
+        container.innerHTML = '';
+
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const minSlot = 30; // 막대 하나당 최소 폭 - 일자/금액 라벨이 안 겹치게
+        const padding = 20;
+        const topPad = 22;    // 금액 라벨 자리
+        const bottomPad = 30; // 일자 라벨 자리
+        const height = 240;
+
+        const width = Math.max(container.clientWidth || 560, series.length * minSlot + padding * 2);
+        const chartTop = topPad;
+        const chartBottom = height - bottomPad;
+        const zeroY = chartTop + (chartBottom - chartTop) / 2;
+        const barMaxH = (chartBottom - chartTop) / 2 - 6;
+
+        const maxAbs = Math.max(...series.map(d => Math.abs(d.pnl)), 1);
+        const slot = (width - padding * 2) / series.length;
+        const barWidth = Math.max(slot - 6, 2);
+
+        // 일자 라벨은 막대 수가 많으면 겹치지 않게 일정 간격으로만 표시 (최대 12개 정도)
+        const labelStep = Math.max(1, Math.ceil(series.length / 12));
+
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+
+        const zeroLine = document.createElementNS(svgNS, 'line');
+        zeroLine.setAttribute('x1', padding);
+        zeroLine.setAttribute('x2', width - padding);
+        zeroLine.setAttribute('y1', zeroY);
+        zeroLine.setAttribute('y2', zeroY);
+        zeroLine.setAttribute('stroke', '#152033');
+        svg.appendChild(zeroLine);
+
+        function addText(x, y, text, fill) {
+            const t = document.createElementNS(svgNS, 'text');
+            t.setAttribute('x', x);
+            t.setAttribute('y', y);
+            t.setAttribute('text-anchor', 'middle');
+            t.setAttribute('font-size', '9');
+            t.setAttribute('font-family', 'JetBrains Mono, monospace');
+            t.setAttribute('fill', fill);
+            t.textContent = text;
+            svg.appendChild(t);
+        }
+
+        series.forEach((d, i) => {
+            const x = padding + i * slot + (slot - barWidth) / 2;
+            const h = Math.abs(d.pnl) / maxAbs * barMaxH;
+            const y = d.pnl >= 0 ? zeroY - h : zeroY;
+            const color = d.pnl > 0 ? '#ff4d6d' : d.pnl < 0 ? '#00ffb2' : '#3a5068';
+
+            const rect = document.createElementNS(svgNS, 'rect');
+            rect.setAttribute('x', x);
+            rect.setAttribute('y', y);
+            rect.setAttribute('width', barWidth);
+            rect.setAttribute('height', Math.max(h, 1));
+            rect.setAttribute('rx', 2);
+            rect.setAttribute('fill', color);
+
+            const title = document.createElementNS(svgNS, 'title');
+            title.textContent = `${d.date}: ${d.pnl >= 0 ? '+' : ''}${d.pnl.toLocaleString()}원`;
+            rect.appendChild(title);
+
+            svg.appendChild(rect);
+
+            // 금액 라벨 - 0원인 날은 생략(안 그러면 매일 "0"이 찍혀서 지저분함)
+            if (d.pnl !== 0) {
+                const amountY = d.pnl > 0 ? y - 4 : y + h + 11;
+                addText(x + barWidth / 2, amountY, (d.pnl >= 0 ? '+' : '') + d.pnl.toLocaleString(), color);
+            }
+
+            // 일자 라벨 - 겹치지 않도록 일정 간격으로만
+            if (i % labelStep === 0 || i === series.length - 1) {
+                const dt = new Date(d.date);
+                addText(x + barWidth / 2, chartBottom + 14, `${dt.getMonth() + 1}/${dt.getDate()}`, '#4d7090');
+            }
+        });
+
+        container.appendChild(svg);
+        container.scrollLeft = container.scrollWidth; // 최신 날짜(가장 오른쪽)가 기본으로 보이게
+    }
+
+    /* ── 개인정보 저장 ── */
+    document.getElementById('profileSaveBtn').addEventListener('click', () => {
+        const name = document.getElementById('nameInput').value.trim();
+        const phone = document.getElementById('phoneInput').value.trim();
+        const msg = document.getElementById('profileMsg');
+
+        fetch('/api/member/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.message === 'SUCCESS') {
+                msg.className = 'field-msg success';
+                msg.textContent = '저장되었습니다.';
+                document.getElementById('profileName').textContent = name;
+            } else {
+                msg.className = 'field-msg error';
+                msg.textContent = data.message;
+            }
+        })
+        .catch(() => {
+            msg.className = 'field-msg error';
+            msg.textContent = '저장 중 오류가 발생했습니다.';
+        });
+    });
+
+    /* ── 회원 탈퇴 ── */
+    function logoutViaPost() {
+        // Spring Security 로그아웃 필터는 POST만 매칭하므로 폼을 만들어 제출
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/logout';
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    document.getElementById('withdrawBtn').addEventListener('click', () => {
+        if (!confirm('정말 탈퇴하시겠습니까? 탈퇴 후에는 로그인할 수 없습니다.')) return;
+
+        fetch('/api/member/withdraw', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.message === 'SUCCESS') {
+                alert('탈퇴 처리되었습니다.');
+                logoutViaPost();
+            } else {
+                alert(data.message);
+            }
+        })
+        .catch(() => alert('탈퇴 처리 중 오류가 발생했습니다.'));
+    });
+</script>
+
+</body>
+</html>

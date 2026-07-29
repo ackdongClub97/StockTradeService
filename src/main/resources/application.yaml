@@ -1,4 +1,7 @@
 spring:
+  config:
+    import: optional:file:./application-secret.yaml
+
   application:
     name: stockTrade
 
@@ -27,6 +30,23 @@ spring:
     user:
       name:
       password:
+    oauth2:
+      client:
+        registration:
+          kakao:
+            client-id: ${KAKAO_CLIENT_ID}
+            client-secret: ${KAKAO_CLIENT_SECRET}
+            client-authentication-method: client_secret_post
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            client-name: Kakao
+            scope: profile_nickname, account_email
+        provider:
+          kakao:
+            authorization-uri: https://kauth.kakao.com/oauth/authorize
+            token-uri: https://kauth.kakao.com/oauth/token
+            user-info-uri: https://kapi.kakao.com/v2/user/me
+            user-name-attribute: id
 
   datasource:
     url: jdbc:h2:file:~/stockTrade
@@ -54,10 +74,12 @@ spring:
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 hantu-openapi:
-  appkey: #{appkey}
-  appsecret: #{appsecret}
+  appkey: ${HANTU_APP_KEY}
+  appsecret: ${HANTU_APP_SECRET}
   appUrl: https://openapivts.koreainvestment.com:29443
   #appUrl: https://openapi.koreainvestment.com:9443 #실전 도메인
+  wsUrl: ws://ops.koreainvestment.com:31000
+  #wsUrl: ws://ops.koreainvestment.com:21000 #실전 도메인
 logging:
   level:
     org.hibernate.SQL: debug
@@ -67,6 +89,6 @@ kis:
     refresh-interval-ms: 30000 # 30초마다 갱신
 
 naver-openapi:
-  clientId: #{clientId}
-  clientSecret: #{clientSecret}
+  clientId: ${NAVER_CLIENT_ID}
+  clientSecret: ${NAVER_CLIENT_SECRET}
 

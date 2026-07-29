@@ -6,20 +6,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import stockOrder.stockTrade.member.CustomerDetailsService;
+import stockOrder.stockTrade.member.KakaoOAuth2UserService;
 
 @Configuration
 @RequiredArgsConstructor
 public class SecurityConfig {
 
     private final CustomerDetailsService userDetailService;
-
-    @Bean
-    public BCryptPasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
+    private final KakaoOAuth2UserService kakaoOAuth2UserService;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -42,7 +38,9 @@ public class SecurityConfig {
                                 "/api/stock/*/stream/**",
                                 "/api/volume/**",
                                 "/api/sse/**",
-                                "/h2-console/**"
+                                "/h2-console/**",
+                                "/oauth2/**",
+                                "/login/oauth2/**"
                         )
                         .permitAll()
                         .anyRequest().authenticated()
@@ -54,6 +52,11 @@ public class SecurityConfig {
                         .loginPage("/login")
                         .defaultSuccessUrl("/stockHome", true)
                         .permitAll()
+                )
+                .oauth2Login(oauth2 -> oauth2
+                        .loginPage("/login")
+                        .userInfoEndpoint(userInfo -> userInfo.userService(kakaoOAuth2UserService))
+                        .defaultSuccessUrl("/stockHome", true)
                 )
                 .logout(logout -> logout
                         .logoutUrl("/logout")

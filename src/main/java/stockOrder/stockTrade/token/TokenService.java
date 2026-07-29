@@ -55,5 +55,33 @@ public class TokenService {
         return token;
     }
 
+    /* 웹소켓 접속키 발급 - REST 접근토큰과 별개로 발급받아야 함 */
+    public String fetchApprovalKey() throws IOException, InterruptedException {
+        String url = apiUrl + "/oauth2/Approval";
+        String json = "{\"grant_type\":\"client_credentials\",\"appkey\":\""
+                + appKey + "\",\"secretkey\":\"" + appSecret + "\"}";
+
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        String body = response.body();
+        log.info("[TokenService] {}", body);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode node = objectMapper.readTree(body);
+        String approvalKey = node.get("approval_key").asText();
+
+        if(approvalKey == null || approvalKey.isEmpty()) {
+            throw new RuntimeException("approval_key is empty: " + body);
+        }
+
+        return approvalKey;
+    }
 
 }

@@ -25,4 +25,5 @@ public class Member {
     private String memberStatus;    // 활성화/비활성화(탈퇴)
     private String joinDate;
     private LocalDateTime loginTime;
+    private String provider;        // 가입 경로: LOCAL / KAKAO
 }

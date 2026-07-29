@@ -43,4 +43,34 @@ public class MemberController {
                 "level", member.getLevel()
         ));
     }
+
+    @PatchMapping("/profile")
+    public ResponseEntity<Map<String, String>> updateProfile(@AuthenticationPrincipal CustomerDetails customerDetails,
+                                                               @RequestBody Map<String, String> body) {
+        if(customerDetails == null){
+            return ResponseEntity.status(401).build();
+        }
+
+        try {
+            String memberId = customerDetails.getMember().getMemberId();
+            memberService.updateProfile(memberId, body.get("name"), body.get("phone"));
+            return ResponseEntity.ok(Map.of("message", "SUCCESS"));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/withdraw")
+    public ResponseEntity<Map<String, String>> withdraw(@AuthenticationPrincipal CustomerDetails customerDetails) {
+        if(customerDetails == null){
+            return ResponseEntity.status(401).build();
+        }
+
+        try {
+            memberService.withdraw(customerDetails.getMember().getMemberId());
+            return ResponseEntity.ok(Map.of("message", "SUCCESS"));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
 }

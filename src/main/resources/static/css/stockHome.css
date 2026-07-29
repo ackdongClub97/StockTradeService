@@ -15,6 +15,46 @@
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* ── 로딩 오버레이 ── */
+    .loading-overlay {
+      position: fixed; inset: 0;
+      z-index: 999;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px;
+      background: var(--bg);
+      transition: opacity .25s ease;
+    }
+    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+
+    .loading-spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 13px; color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: .5px;
+    }
+
+    .retry-btn {
+      padding: 10px 20px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .retry-btn:hover { background: rgba(0,194,255,.1); }
+
     body {
       background: var(--bg);
       color: var(--text);
@@ -84,15 +124,6 @@
     .dot.loading { background: var(--gold); animation: blink .6s ease-in-out infinite; }
     .dot.error   { background: var(--red); }
     @keyframes blink { 0%,100%{opacity:1}50%{opacity:.25} }
-
-    .countdown-bar { width: 60px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
-    .countdown-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
-      border-radius: 2px;
-      transition: width 1s linear;
-    }
-    .countdown-label { font-size: 10px; color: var(--text-dim); min-width: 24px; }
 
     /* ── 테이블 컨테이너 ── */
     .stock-ranking-list {
@@ -382,6 +413,19 @@
 
     .order-table td.up   { color: #ff3b5c; }
     .order-table td.down { color: #2979ff; }
+
+    .cancel-order-btn {
+        padding: 4px 10px;
+        border: 1px solid var(--red);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--red);
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background .15s;
+    }
+    .cancel-order-btn:hover { background: rgba(255,77,109,.12); }
 
     /*모바일*/
 

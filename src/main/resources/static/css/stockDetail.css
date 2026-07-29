@@ -12,6 +12,47 @@
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+        /* ── 로딩 오버레이 ── */
+        .loading-overlay {
+          position: fixed; inset: 0;
+          z-index: 999;
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
+          gap: 16px;
+          background: var(--bg);
+          transition: opacity .25s ease;
+        }
+        .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+
+        .loading-spinner {
+          width: 36px; height: 36px;
+          border: 3px solid var(--border);
+          border-top-color: var(--accent);
+          border-radius: 50%;
+          animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-text {
+          font-size: 13px; color: var(--text-dim);
+          font-family: 'JetBrains Mono', monospace;
+          letter-spacing: .5px;
+        }
+
+        .retry-btn {
+          padding: 10px 20px;
+          border: 1px solid var(--accent);
+          border-radius: 8px;
+          background: transparent;
+          color: var(--accent);
+          font-size: 13px;
+          font-weight: 700;
+          font-family: 'Noto Sans KR', sans-serif;
+          cursor: pointer;
+          transition: background .15s;
+        }
+        .retry-btn:hover { background: rgba(0,194,255,.1); }
+
         body {
           background: var(--bg);
           color: var(--text);
@@ -120,6 +161,62 @@
           animation: shimmer 1.4s infinite;
         }
         @keyframes shimmer { to { background-position: -200% 0; } }
+
+        /* ── 실시간 호가 ── */
+        .orderbook {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          overflow: hidden;
+          margin-bottom: 20px;
+          font-family: 'JetBrains Mono', monospace;
+        }
+
+        .orderbook-row {
+          position: relative;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 6px 14px;
+          font-size: 12px;
+          border-bottom: 1px solid var(--border);
+        }
+        .orderbook-row:last-child { border-bottom: none; }
+
+        .orderbook-bar {
+          position: absolute;
+          top: 0; bottom: 0; right: 0;
+          z-index: 0;
+          opacity: .14;
+          transition: width .3s ease;
+        }
+        .orderbook-row.ask .orderbook-bar { background: var(--accent); }
+        .orderbook-row.bid .orderbook-bar { background: var(--red); }
+
+        .orderbook-left {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .orderbook-arrow {
+          display: inline-block;
+          width: 8px;
+          font-size: 9px;
+          line-height: 1;
+        }
+        .orderbook-arrow.up   { color: var(--red); }
+        .orderbook-arrow.down { color: var(--accent2); }
+
+        .orderbook-vol {
+          position: relative;
+          z-index: 1;
+        }
+        .orderbook-row.ask .orderbook-price { color: var(--accent); }
+        .orderbook-row.bid .orderbook-price { color: var(--red); }
+        .orderbook-vol { color: var(--text-dim); }
 
         /* ── 뉴스 섹션 ── */
         .section-title {
@@ -416,6 +513,65 @@
             outline: none;
             border: 1px solid #555;
         }
+
+        .input-group input[readonly] {
+            color: #999;
+            cursor: default;
+        }
+
+        /* 현재가/지정가 선택 탭 (매도 전용) */
+        .price-mode-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .price-mode-btn {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #333;
+            border-radius: 10px;
+            background: #23262f;
+            color: #999;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+
+        .price-mode-btn.active {
+            background: #2979ff;
+            border-color: #2979ff;
+            color: white;
+        }
+
+        /* 최종 판매 금액 / 판매 수익 - 수정 불가 표시 전용 */
+        .readonly-info-group {
+            background: #23262f;
+            border-radius: 12px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .readonly-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .readonly-info-row span:first-child {
+            color: #aaa;
+        }
+
+        .readonly-info-row span:last-child {
+            font-weight: 700;
+        }
+
+        .readonly-info-row span.up   { color: #ff3b5c; }
+        .readonly-info-row span.down { color: #00e0a3; }
 
         /* 주문 버튼 */
         .submit-btn {

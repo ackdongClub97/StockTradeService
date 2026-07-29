@@ -10,6 +10,13 @@
 </head>
 <body>
 
+<!-- 실시간 랭킹 데이터가 도착하기 전까지 표시 -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner" id="loadingSpinner"></div>
+  <div class="loading-text" id="loadingText">실시간 랭킹을 불러오는 중...</div>
+  <button type="button" class="retry-btn" id="loadingRetryBtn" style="display:none;">다시 시도</button>
+</div>
+
 <div class="page">
 
   <!-- 헤더 -->
@@ -36,12 +43,6 @@
             </div>
             <div class="status-chip" id="lastUpdateChip" style="display:none">
               <span id="lastUpdateText">—</span>
-            </div>
-            <div class="status-chip">
-              <div class="countdown-bar">
-                <div class="countdown-fill" id="countdownFill" style="width:100%"></div>
-              </div>
-              <span class="countdown-label" id="countdownLabel">—</span>
             </div>
           </div>
         </div>
@@ -129,28 +130,11 @@
 
 
 <script th:inline="none">
-  const REFRESH_SEC = 30;
-
   const rankBody       = document.getElementById('rankBody');
   const statusDot      = document.getElementById('statusDot');
   const statusText     = document.getElementById('statusText');
   const lastUpdateChip = document.getElementById('lastUpdateChip');
   const lastUpdateText = document.getElementById('lastUpdateText');
-  const countdownFill  = document.getElementById('countdownFill');
-  const countdownLabel = document.getElementById('countdownLabel');
-
-  let remaining = REFRESH_SEC;
-  let countdownTimer = null;
-
-  function startCountdown() {
-    clearInterval(countdownTimer);
-    remaining = REFRESH_SEC;
-    countdownTimer = setInterval(() => {
-      remaining = Math.max(0, remaining - 1);
-      countdownFill.style.width = (remaining / REFRESH_SEC * 100) + '%';
-      countdownLabel.textContent = remaining + 's';
-    }, 1000);
-  }
 
   function fmtPrice(v) { return parseInt(v || 0).toLocaleString('ko-KR') + '원'; }
   function fmtVol(v) {
@@ -216,12 +200,16 @@
     wrap.classList.add('flash');
   }
 
-  fetch('/api/member/info')
-    .then(r => r.json())
-    .then(data => {
-        const seed = parseInt(data.seed);
-        document.getElementById('seed').textContent = seed.toLocaleString('ko-KR');
-    });
+  if (window.__authenticated) {
+    fetch('/api/member/info')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+          if (!data) return;
+          const seed = parseInt(data.seed);
+          document.getElementById('seed').textContent = seed.toLocaleString('ko-KR');
+      })
+      .catch(() => {});
+  }
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -240,6 +228,25 @@
     });
   });
 
+  let rankLoaded = false;
+
+  function hideLoadingOverlay() {
+    rankLoaded = true;
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.classList.add('hidden');
+  }
+
+  // 일정 시간이 지나도 데이터가 안 왔으면 무한 로딩 대신 에러 화면 + 다시 시도 버튼을 보여줌
+  function showLoadingError() {
+    if (rankLoaded) return;
+    document.getElementById('loadingSpinner').style.display = 'none';
+    document.getElementById('loadingText').textContent = '실시간 랭킹을 불러오지 못했습니다.';
+    document.getElementById('loadingRetryBtn').style.display = 'inline-block';
+  }
+  setTimeout(showLoadingError, 10000);
+
+  document.getElementById('loadingRetryBtn').addEventListener('click', () => location.reload());
+
   function connectSSE() {
     statusDot.className = 'dot loading';
     statusText.textContent = '연결 중...';
@@ -247,16 +254,16 @@
     const es = new EventSource('/api/volume/stream');
 
     es.addEventListener('volume-rank', (e) => {
+      hideLoadingOverlay();
       const payload = JSON.parse(e.data);
       renderTable(payload.data);
-      startCountdown();
       statusDot.className = 'dot live';
       statusText.textContent = '실시간 연결';
       lastUpdateChip.style.display = 'flex';
       lastUpdateText.textContent = new Date(payload.updatedAt).toLocaleTimeString('ko-KR');
     });
 
-    // 탭 클릭 시 데이터 로드
+    // 탭 클릭 시 데이터 로드 (보유주식은 SSE로 항상 최신 상태 유지되므로 다시 불러올 필요 없음)
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -264,68 +271,125 @@
             btn.classList.add('active');
             document.getElementById(btn.dataset.tab).classList.add('active');
 
-            // ← 추가
-            if (btn.dataset.tab === 'holding') loadHolding();
             if (btn.dataset.tab === 'history') loadHistory();
         });
     });
 
-    function loadHolding() {
-        fetch('/api/order/holding')
-            .then(r => {
-              if(r.url.includes('/login')) {
-                document.getElementById('holding').innerHTML = '<div class="empty-state">로그인이 필요합니다.</div>';
-                return null;
-              }
-              return r.json();
-            })
-            .then(list => {
-                if(!list) return;
-                const el = document.getElementById('holding');
-                if (!list || list.length === 0) {
-                    el.innerHTML = '<div class="empty-state">보유 종목이 없습니다.</div>';
-                    return;
-                }
-                el.innerHTML = `
-                    <table class="order-table">
-                        <thead>
-                            <tr>
-                                <th>종목명</th>
-                                <th class="right">수량</th>
-                                <th class="right">현재가</th>
-                                <th class="right">수익률</th>
-                                <th class="right">평가손익</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${list.map(o => {
-                                const dir = o.profitRate > 0 ? 'up' : o.profitRate < 0 ? 'down' : 'flat';
-                                const sign = o.profitRate > 0 ? '▲' : o.profitRate < 0 ? '▼' : '';
-                                return `
-                                <tr class="clickable-row"
-                                    data-code = "${o.stockCode}"
-                                    data-name = "${encodeURIComponent(o.stockName)}">
-                                    <td>
-                                        <div class="stock-name">${o.stockName}</div>
-                                    </td>
-                                    <td class="right">${o.totalQuantity}주</td>
-                                    <td class="right">${o.totalValue.toLocaleString()}원</td>
-                                    <td class="right ${dir}">${sign}${Math.abs(o.profitRate).toFixed(2)}%</td>
-                                    <td class="right ${dir}">
-                                        ${o.profitValue > 0 ? '+' : ''}${o.profitValue.toLocaleString()}원
-                                    </td>
-                                </tr>`;
-                            }).join('')}
-                        </tbody>
-                    </table>`;
+    // 매번 통째로 다시 그리지 않고, 종목 구성이 바뀔 때만 테이블을 다시 만들고 그 외엔 바뀐 셀만 갱신
+    let holdingRows = null; // Map<stockCode, {row, qtyTd, priceTd, rateTd, profitTd, last:{}}>
 
-                    el.querySelectorAll('.clickable-row').forEach(row => {
-                        row.addEventListener('click', () => {
-                            window.location.href = `/stock/${row.dataset.code}?name=${row.dataset.name}`;
-                        });
-                    });
+    function buildHoldingTable() {
+        const el = document.getElementById('holding');
+        el.innerHTML = `
+            <table class="order-table">
+                <thead>
+                    <tr>
+                        <th>종목명</th>
+                        <th class="right">수량</th>
+                        <th class="right">현재가</th>
+                        <th class="right">수익률</th>
+                        <th class="right">평가손익</th>
+                    </tr>
+                </thead>
+                <tbody id="holdingBody"></tbody>
+            </table>`;
+        holdingRows = new Map();
+    }
 
-            });
+    function createHoldingRow(tbody, stockCode, stockName) {
+        const row = document.createElement('tr');
+        row.className = 'clickable-row';
+        row.dataset.code = stockCode;
+        row.dataset.name = encodeURIComponent(stockName);
+        row.addEventListener('click', () => {
+            window.location.href = `/stock/${row.dataset.code}?name=${row.dataset.name}`;
+        });
+
+        const nameTd = document.createElement('td');
+        nameTd.innerHTML = `<div class="stock-name">${stockName}</div>`;
+
+        const qtyTd    = document.createElement('td'); qtyTd.className    = 'right';
+        const priceTd  = document.createElement('td'); priceTd.className  = 'right';
+        const rateTd   = document.createElement('td'); rateTd.className   = 'right';
+        const profitTd = document.createElement('td'); profitTd.className = 'right';
+
+        row.append(nameTd, qtyTd, priceTd, rateTd, profitTd);
+        tbody.appendChild(row);
+
+        return { row, qtyTd, priceTd, rateTd, profitTd, last: {} };
+    }
+
+    function renderHolding(list) {
+        if (!list || list.length === 0) {
+            document.getElementById('holding').innerHTML = '<div class="empty-state">보유 종목이 없습니다.</div>';
+            holdingRows = null;
+            return;
+        }
+
+        // 보유 종목 구성 자체가 바뀐 경우(신규 매수/전량 매도)에만 테이블을 새로 만듦
+        const codes = list.map(o => o.stockCode);
+        const sameCodes = holdingRows && codes.length === holdingRows.size && codes.every(c => holdingRows.has(c));
+
+        if (!sameCodes) {
+            buildHoldingTable();
+            const tbody = document.getElementById('holdingBody');
+            list.forEach(o => holdingRows.set(o.stockCode, createHoldingRow(tbody, o.stockCode, o.stockName)));
+        }
+
+        list.forEach(o => {
+            const cell = holdingRows.get(o.stockCode);
+            if (!cell) return;
+
+            if (cell.last.totalQuantity !== o.totalQuantity) {
+                cell.qtyTd.textContent = `${o.totalQuantity}주`;
+                cell.last.totalQuantity = o.totalQuantity;
+            }
+
+            if (cell.last.totalValue !== o.totalValue) {
+                cell.priceTd.textContent = `${o.totalValue.toLocaleString()}원`;
+                cell.last.totalValue = o.totalValue;
+            }
+
+            const dir = o.profitRate > 0 ? 'up' : o.profitRate < 0 ? 'down' : 'flat';
+            const sign = o.profitRate > 0 ? '▲' : o.profitRate < 0 ? '▼' : '';
+            const rateText = `${sign}${Math.abs(o.profitRate).toFixed(2)}%`;
+            if (cell.last.rateText !== rateText) {
+                cell.rateTd.textContent = rateText;
+                cell.rateTd.className = `right ${dir}`;
+                cell.last.rateText = rateText;
+            }
+
+            const profitText = `${o.profitValue > 0 ? '+' : ''}${o.profitValue.toLocaleString()}원`;
+            if (cell.last.profitText !== profitText) {
+                cell.profitTd.textContent = profitText;
+                cell.profitTd.className = `right ${dir}`;
+                cell.last.profitText = profitText;
+            }
+        });
+    }
+
+    let holdingConnected = false;
+
+    function connectHoldingSSE() {
+        if (holdingConnected) return;
+
+        if (!window.__authenticated) {
+            document.getElementById('holding').innerHTML = '<div class="empty-state">로그인이 필요합니다.</div>';
+            return;
+        }
+
+        holdingConnected = true;
+        const holdingEs = new EventSource('/api/order/holding/stream');
+
+        holdingEs.addEventListener('holding', (e) => {
+            renderHolding(JSON.parse(e.data));
+        });
+
+        holdingEs.onerror = () => {
+            holdingEs.close();
+            holdingConnected = false;
+            setTimeout(connectHoldingSSE, 5000);
+        };
     }
 
     function loadHistory() {
@@ -354,6 +418,7 @@
                                 <th class="right">단가</th>
                                 <th class="right">상태</th>
                                 <th class="right">주문시간</th>
+                                <th class="right"></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -376,9 +441,18 @@
                                     </span>
                                 </td>
                                 <td class="right">${fmtDateTime(o.createdAt)}</td>
+                                <td class="right">
+                                    ${(o.orderStatus === 'PENDING' || o.orderStatus === 'PARTIAL')
+                                        ? `<button class="cancel-order-btn" data-order-id="${o.orderId}">취소</button>`
+                                        : ''}
+                                </td>
                             </tr>`).join('')}
                         </tbody>
                     </table>`;
+
+                el.querySelectorAll('.cancel-order-btn').forEach(btn => {
+                    btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, loadHistory));
+                });
 
             })
             .catch(() => {
@@ -400,14 +474,29 @@
         return map[status] || status;
     }
 
+    function cancelOrder(orderId, onDone) {
+        if (!confirm('이 주문을 취소하시겠습니까?')) return;
+
+        fetch(`/api/order/${orderId}/cancel`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.message === 'SUCCESS') {
+                    if (onDone) onDone();
+                } else {
+                    alert(data.message || '취소에 실패했습니다.');
+                }
+            })
+            .catch(() => alert('취소 처리 중 오류가 발생했습니다.'));
+    }
+
     function fmtDateTime(str) {
         if (!str) return '-';
         const d = new Date(str);
         return d.toLocaleDateString('ko-KR') + ' ' + d.toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit'});
     }
 
-    // 페이지 로드 시 보유주식 먼저 로드
-    loadHolding();
+    // 페이지 로드 시 보유주식 실시간 스트림 연결
+    connectHoldingSSE();
 
     es.onerror = () => {
       statusDot.className = 'dot error';

@@ -1,0 +1,178 @@
+package stockOrder.stockTrade.matching;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import stockOrder.stockTrade.kis.AskingPriceDTO;
+import stockOrder.stockTrade.kis.KisService;
+import stockOrder.stockTrade.kis.KisWebSocketService;
+import stockOrder.stockTrade.member.Member;
+import stockOrder.stockTrade.member.MemberRepository;
+import stockOrder.stockTrade.order.Order;
+import stockOrder.stockTrade.order.OrderRepository;
+import stockOrder.stockTrade.order.OrderStatus;
+import stockOrder.stockTrade.order.OrderType;
+import stockOrder.stockTrade.order.RealizedPnlService;
+import stockOrder.stockTrade.order.Trade;
+import stockOrder.stockTrade.order.TradeRepository;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/* 호가 기반 부분체결 매칭 로직(MatchingService.tryMatch → execute) 검증.
+   실제 DB/KIS 연동 없이 Mockito로 의존성을 대체한 순수 유닛 테스트. */
+@ExtendWith(MockitoExtension.class)
+class MatchingServiceTest {
+
+    private static final String ORDER_ID = "ORD-TEST-0001";
+    private static final String MEMBER_ID = "member1";
+    private static final String STOCK_CODE = "005930";
+
+    @Mock private OrderRepository orderRepository;
+    @Mock private TradeRepository tradeRepository;
+    @Mock private MemberRepository memberRepository;
+    @Mock private KisService kisService;
+    @Mock private KisWebSocketService kisWebSocketService;
+    @Mock private RealizedPnlService realizedPnlService;
+
+    @InjectMocks
+    private MatchingService matchingService;
+
+    @BeforeEach
+    void setUp() {
+        when(kisService.isMarketOpen()).thenReturn(true);
+    }
+
+    private Order newBuyOrder(int quantity, int price) {
+        Order order = new Order();
+        order.setOrderId(ORDER_ID);
+        order.setMemberId(MEMBER_ID);
+        order.setStockCode(STOCK_CODE);
+        order.setStockName("삼성전자");
+        order.setOrderType(OrderType.BUY);
+        order.setOrderStatus(OrderStatus.PENDING);
+        order.setPrice(price);
+        order.setQuantity(quantity);
+        order.setMatchedQuantity(0);
+        order.setCreatedAt(LocalDateTime.now());
+        return order;
+    }
+
+    private Member newMember() {
+        Member member = new Member();
+        member.setMemberId(MEMBER_ID);
+        member.setSeed(10_000_000);
+        return member;
+    }
+
+    /* 매도호가 1단계(index 0)만 값을 채우고 나머지 9단계는 빈 호가(0)인 10단계 스냅샷 생성 */
+    private AskingPriceDTO askingPriceWith(String askPrice, String askVolume) {
+        AskingPriceDTO dto = new AskingPriceDTO();
+        dto.setStockCode(STOCK_CODE);
+
+        String[] askPrices = new String[10];
+        String[] askVolumes = new String[10];
+        String[] bidPrices = new String[10];
+        String[] bidVolumes = new String[10];
+        for (int i = 0; i < 10; i++) {
+            askPrices[i] = "0";
+            askVolumes[i] = "0";
+            bidPrices[i] = "0";
+            bidVolumes[i] = "0";
+        }
+        askPrices[0] = askPrice;
+        askVolumes[0] = askVolume;
+
+        dto.setAskPrices(askPrices);
+        dto.setAskVolumes(askVolumes);
+        dto.setBidPrices(bidPrices);
+        dto.setBidVolumes(bidVolumes);
+        dto.setTotalAskVolume(askVolume);
+        dto.setTotalBidVolume("0");
+        return dto;
+    }
+
+    @Test
+    @DisplayName("1. 부분체결 성공 - 두 번에 나눠 체결되어도 결국 전량 체결(MATCHED)된다")
+    void 부분체결_후_잔량이_모두_체결되면_MATCHED_상태가_된다() {
+        Order order = newBuyOrder(10, 50_000);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        // 1차 시도: 지정가(50,000) 이하 매도호가 잔량이 4주뿐 -> 4주만 체결, 6주는 미체결로 남음
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("49000", "4"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(4, order.getMatchedQuantity(), "1차 체결 후 누적 체결수량은 4주여야 한다");
+        assertEquals(OrderStatus.PARTIAL, order.getOrderStatus(), "전량 체결 전이므로 PARTIAL 상태여야 한다");
+
+        // 2차 시도(다음 배치 주기): 남은 6주만큼 호가 물량이 들어와서 잔량이 전부 체결됨
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("49500", "6"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(10, order.getMatchedQuantity(), "2차 체결 후 누적 체결수량은 주문수량 전체(10주)여야 한다");
+        assertEquals(OrderStatus.MATCHED, order.getOrderStatus(), "전량 체결됐으므로 MATCHED 상태여야 한다");
+
+        ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
+        verify(tradeRepository, times(2)).save(tradeCaptor.capture());
+
+        List<Trade> trades = tradeCaptor.getAllValues();
+        assertEquals(2, trades.size(), "체결이 두 번 나뉘어 일어났으니 Trade도 2건 insert돼야 한다");
+        assertEquals(4, trades.get(0).getMatchedQuantity());
+        assertEquals(49000, trades.get(0).getMatchedPrice());
+        assertEquals(6, trades.get(1).getMatchedQuantity());
+        assertEquals(49500, trades.get(1).getMatchedPrice());
+
+        int totalFilled = trades.stream().mapToInt(Trade::getMatchedQuantity).sum();
+        assertEquals(order.getQuantity(), totalFilled, "Trade 수량 합은 원래 주문수량과 같아야 한다");
+    }
+
+    @Test
+    @DisplayName("2. 부분체결 일부 실패 - 호가 잔량 부족 시 그만큼만 체결되고 나머지는 미체결(PARTIAL)로 남는다")
+    void 호가_잔량이_부족하면_일부만_체결되고_나머지는_미체결로_남는다() {
+        Order order = newBuyOrder(10, 50_000);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        // 지정가(50,000) 이하 매도호가 잔량이 3주뿐 -> 10주 중 3주만 체결 가능
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("48000", "3"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(3, order.getMatchedQuantity(), "호가 잔량(3주)만큼만 체결돼야 한다");
+        assertEquals(7, order.getQuantity() - order.getMatchedQuantity(), "나머지 7주는 미체결 상태로 남아야 한다");
+        assertEquals(OrderStatus.PARTIAL, order.getOrderStatus());
+        assertNotEquals(OrderStatus.MATCHED, order.getOrderStatus(), "전량 체결이 아니므로 MATCHED이면 안 된다");
+        assertNotEquals(OrderStatus.FAILED, order.getOrderStatus(), "일부라도 체결됐으니 FAILED로 처리되면 안 된다");
+
+        verify(tradeRepository, times(1)).save(any(Trade.class));
+
+        // 더 이상 체결 가능한 호가가 없는 상황(잔량 0) -> 재시도해도 추가 체결 없이 PARTIAL 그대로 유지
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("0", "0"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(3, order.getMatchedQuantity(), "체결 가능한 호가가 없으면 누적 체결수량이 그대로여야 한다");
+        assertEquals(OrderStatus.PARTIAL, order.getOrderStatus());
+        verify(tradeRepository, times(1)).save(any(Trade.class)); // 추가 Trade 없이 여전히 1번만 호출됨
+    }
+}

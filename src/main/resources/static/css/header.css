@@ -50,6 +50,16 @@
 
     .login_btn{ color: white; text-decoration: none; color: var(--text-dim);}
 
+    .logout-form { display: inline; }
+    .logout-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      cursor: pointer;
+    }
+
     .name {color: var(--text-dim); margin-top: 2px; letter-spacing: .3px; }
 
     /*모바일*/

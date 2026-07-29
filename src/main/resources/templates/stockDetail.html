@@ -15,6 +15,13 @@
 <div id="stockData2" th:data-name="${name}"></div>
 <input id="stockData3" style="display:none;">
 
+<!-- 실시간 현재가가 도착하기 전까지 표시 -->
+<div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner" id="loadingSpinner"></div>
+    <div class="loading-text" id="loadingText">실시간 시세를 불러오는 중...</div>
+    <button type="button" class="retry-btn" id="loadingRetryBtn" style="display:none;">다시 시도</button>
+</div>
+
 <div class="page">
 
     <!-- 헤더 -->
@@ -69,9 +76,34 @@
                     <input id="quantity" type="number" placeholder="수량 입력">
                 </div>
 
-                <div class="input-group">
+                <!-- 매수 전용: 기존 방식 그대로(현재가로 총액 자동 계산) -->
+                <div class="input-group" id="buyPriceGroup">
                     <label>주문 가격</label>
                     <input id="orderPrice" type="number" placeholder="가격 입력">
+                </div>
+
+                <!-- 매도 전용: 현재가/지정가 선택 + 단가/최종금액/수익 -->
+                <div id="sellPriceSection" style="display:none;">
+                    <div class="price-mode-tabs">
+                        <button type="button" class="price-mode-btn active" id="marketPriceBtn" data-mode="market">현재가</button>
+                        <button type="button" class="price-mode-btn" id="limitPriceBtn" data-mode="limit">지정가</button>
+                    </div>
+
+                    <div class="input-group">
+                        <label>판매 단가 (1주)</label>
+                        <input id="sellUnitPrice" type="number" readonly>
+                    </div>
+
+                    <div class="readonly-info-group">
+                        <div class="readonly-info-row">
+                            <span>최종 판매 금액</span>
+                            <span id="sellTotalAmount">0원</span>
+                        </div>
+                        <div class="readonly-info-row">
+                            <span>판매 수익</span>
+                            <span id="sellProfit">0원</span>
+                        </div>
+                    </div>
                 </div>
 
                 <button class="submit-btn" id="submit-btn">주문하기</button>
@@ -94,6 +126,10 @@
                 <div class="stat-value" id="statVrss"><div class="skeleton" style="width:70px"></div></div>
             </div>
         </div>
+
+        <!-- 실시간 호가 -->
+        <div class="section-title">호가</div>
+        <div class="orderbook" id="orderbook"></div>
 
         <!-- 관련 뉴스 -->
         <div class="section-title">관련 뉴스</div>
@@ -131,10 +167,31 @@
       return str.replace(/<[^>]*>/g, '');
     }
 
+    <!--              로딩 오버레이              -->
+    let priceLoaded = false;
+
+    function hideLoadingOverlay() {
+        priceLoaded = true;
+        const overlay = document.getElementById('loadingOverlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+
+    // 일정 시간이 지나도 데이터가 안 왔으면 무한 로딩 대신 에러 화면 + 다시 시도 버튼을 보여줌
+    function showLoadingError() {
+        if (priceLoaded) return;
+        document.getElementById('loadingSpinner').style.display = 'none';
+        document.getElementById('loadingText').textContent = '실시간 시세를 불러오지 못했습니다.';
+        document.getElementById('loadingRetryBtn').style.display = 'inline-block';
+    }
+    setTimeout(showLoadingError, 10000);
+
+    document.getElementById('loadingRetryBtn').addEventListener('click', () => location.reload());
+
     <!--              주식 상세 조회              -->
     function connectSSE() {
         const es = new EventSource(`/api/stock/${code}/stream`);
         es.addEventListener('stock-detail', (e) => {
+            hideLoadingOverlay();
             const data = JSON.parse(e.data);
 
             const rate  = parseFloat(data.prdyCtrt || 0);
@@ -145,8 +202,17 @@
             <!-- 종목 아이콘 (앞 2글자) -->
             stockIcon.textContent = code.slice(0, 2);
 
-            document.getElementById('currentPrice').textContent = fmtPrice(data.stckPrpr);
+            const priceEl = document.getElementById('currentPrice');
+            priceEl.textContent = fmtPrice(data.stckPrpr);
             document.getElementById('stockData3').value = data.stckPrpr;
+
+            // 매도 모달이 "현재가" 모드로 열려있는 동안엔 실시간 체결가를 계속 반영
+            modalStockPrice = parseInt(data.stckPrpr) || 0;
+            if (orderType === 'sell' && priceMode === 'market'
+                    && document.getElementById('tradeModal').style.display === 'block') {
+                sellUnitPrice.value = modalStockPrice;
+                updateSellComputedFields();
+            }
 
             const changeEl = document.getElementById('priceChange');
             changeEl.className = `price-change ${dir}`;
@@ -156,6 +222,90 @@
             document.getElementById('statRate').className    = `stat-value ${dir === 'up' ? 'price-change up' : dir === 'down' ? 'price-change down' : ''}`;
             document.getElementById('statVol').textContent   = fmtVol(data.acmlVol);
             document.getElementById('statVrss').textContent  = `${vrss > 0 ? '+' : ''}${vrss.toLocaleString()}원`;
+        });
+    }
+
+    <!--              실시간 호가 조회 - 매번 새로 그리지 않고 바뀐 셀만 갱신              -->
+    function fmtNum(v) { return parseInt(v || 0).toLocaleString('ko-KR'); }
+
+    let orderbookCells = null; // { ask: {1:{row,bar,price,vol}, ...10}, bid: {...} }
+
+    function createOrderbookRow(container, side) {
+        const row = document.createElement('div');
+        row.className = `orderbook-row ${side}`;
+
+        const bar = document.createElement('div');
+        bar.className = 'orderbook-bar';
+
+        const left = document.createElement('span');
+        left.className = 'orderbook-left';
+
+        const arrow = document.createElement('span');
+        arrow.className = 'orderbook-arrow';
+
+        const price = document.createElement('span');
+        price.className = 'orderbook-price';
+
+        const vol = document.createElement('span');
+        vol.className = 'orderbook-vol';
+
+        left.append(arrow, price);
+        row.append(bar, left, vol);
+        container.appendChild(row);
+
+        return { row, bar, arrow, price, vol, lastPrice: null, lastVol: null };
+    }
+
+    function buildOrderbookSkeleton() {
+        const container = document.getElementById('orderbook');
+        container.innerHTML = '';
+        orderbookCells = { ask: {}, bid: {} };
+
+        // 매도호가: 10단계(가장 먼 가격)부터 1단계(현재가에 가장 가까운 가격) 순으로 위에서 아래로 배치
+        for (let lvl = 10; lvl >= 1; lvl--) orderbookCells.ask[lvl] = createOrderbookRow(container, 'ask');
+        for (let lvl = 1; lvl <= 10; lvl++) orderbookCells.bid[lvl] = createOrderbookRow(container, 'bid');
+    }
+
+    function updateOrderbookCell(cell, price, vol, maxVol) {
+        const priceNum = parseInt(price || 0);
+        const volNum   = parseInt(vol || 0);
+
+        // 실제로 바뀐 값만 DOM에 쓴다 - 안 바뀐 셀은 건드리지 않아야 전체가 같이 깜빡이지 않음
+        if (cell.lastVol !== volNum) {
+            cell.bar.style.width = Math.round(volNum / maxVol * 100) + '%';
+            cell.vol.textContent = volNum.toLocaleString();
+            cell.lastVol = volNum;
+        }
+
+        if (cell.lastPrice !== priceNum) {
+            if (cell.lastPrice !== null) {
+                const up = priceNum > cell.lastPrice;
+                cell.arrow.textContent = up ? '▲' : '▼';
+                cell.arrow.className = `orderbook-arrow ${up ? 'up' : 'down'}`;
+            }
+            cell.price.textContent = fmtNum(price);
+            cell.lastPrice = priceNum;
+        }
+    }
+
+    function renderOrderbook(data) {
+        if (!orderbookCells) buildOrderbookSkeleton();
+
+        const askVols = data.askVolumes.map(v => parseInt(v || 0));
+        const bidVols = data.bidVolumes.map(v => parseInt(v || 0));
+        const maxVol  = Math.max(...askVols, ...bidVols, 1);
+
+        for (let i = 0; i < 10; i++) {
+            const lvl = i + 1;
+            updateOrderbookCell(orderbookCells.ask[lvl], data.askPrices[i], data.askVolumes[i], maxVol);
+            updateOrderbookCell(orderbookCells.bid[lvl], data.bidPrices[i], data.bidVolumes[i], maxVol);
+        }
+    }
+
+    function connectAskingPriceSSE() {
+        const es = new EventSource(`/api/stock/${code}/asking/stream`);
+        es.addEventListener('asking-price', (e) => {
+            renderOrderbook(JSON.parse(e.data));
         });
     }
 
@@ -198,35 +348,42 @@
     let orderType = '';
     let seed = 0;
     let maxQty = 0;
+    let sellAvgPrice = 0;
+    let priceMode = 'market'; // 'market' | 'limit' - 매도 전용
 
     function openModal(type) {
-        const now = new Date();
-        const formatted = now.toLocaleString('ko-KR');
         orderType = type;
 
         const modal = document.getElementById('tradeModal');
         const title = document.getElementById('modalTitle');
         const submitBtn = document.querySelector('.submit-btn');
         const price = document.getElementById('stockPrice');
+        const buyPriceGroup = document.getElementById('buyPriceGroup');
+        const sellPriceSection = document.getElementById('sellPriceSection');
 
         const clickPrice = parseInt(document.getElementById('stockData3').value || 0);
         modalStockPrice = clickPrice;
 
         price.innerText = document.getElementById('currentPrice').textContent;
+        quantity.value = '';
 
         if(type == 'buy') {
             title.innerText = '매수 주문';
             submitBtn.innerText = '매수하기';
             submitBtn.style.background = 'linear-gradient(135deg, #ff3b5c, #ff6b81)';
 
+            buyPriceGroup.style.display = 'flex';
+            sellPriceSection.style.display = 'none';
+            orderPrice.value = '';
+
             // 매수 가능 수량 계산
             fetch('/api/member/info')
             .then(r => r.json())
             .then(data => {
                 seed = parseInt(data.seed);
-                const maxQty = modalStockPrice > 0 ? Math.floor(seed / modalStockPrice) : 0;
+                const maxBuyQty = modalStockPrice > 0 ? Math.floor(seed / modalStockPrice) : 0;
                 document.getElementById('maxQtyInfo').textContent =
-                    `보유 투자금: ${seed.toLocaleString()}원 / 최대 ${maxQty}주 매수 가능`;
+                    `보유 투자금: ${seed.toLocaleString()}원 / 최대 ${maxBuyQty}주 매수 가능`;
             });
 
         } else if (type == 'sell') {
@@ -234,12 +391,18 @@
             submitBtn.innerText = '매도하기';
             submitBtn.style.background = 'linear-gradient(135deg, #2979ff, #5393ff)';
 
-            // 매도 가능 수량 계산
+            buyPriceGroup.style.display = 'none';
+            sellPriceSection.style.display = 'block';
+            setPriceMode('market');
+
+            // 매도 가능 수량 + 평균매입단가 조회
             fetch(`/api/order/memberStockInfo?stockCode=${code}`)
             .then(r => r.json())
             .then(data => {
                 maxQty = data.totalQuantity;
+                sellAvgPrice = parseFloat(data.avgPrice) || 0;
                 document.getElementById('maxQtyInfo').textContent = `최대 ${maxQty}주 매도 가능`;
+                updateSellComputedFields();
             });
         }
 
@@ -249,29 +412,73 @@
     function closeModal() {
         document.getElementById('quantity').value = 0;
         document.getElementById('orderPrice').value = 0;
+        document.getElementById('sellUnitPrice').value = '';
         document.getElementById('tradeModal').style.display = 'none';
     }
 
     const quantity = document.getElementById('quantity');
     const orderPrice = document.getElementById('orderPrice');
+    const sellUnitPrice = document.getElementById('sellUnitPrice');
+
+    function setPriceMode(mode) {
+        priceMode = mode;
+        document.getElementById('marketPriceBtn').classList.toggle('active', mode === 'market');
+        document.getElementById('limitPriceBtn').classList.toggle('active', mode === 'limit');
+
+        if (mode === 'market') {
+            sellUnitPrice.readOnly = true;
+            sellUnitPrice.value = modalStockPrice;
+        } else {
+            sellUnitPrice.readOnly = false;
+            if (!sellUnitPrice.value) sellUnitPrice.value = modalStockPrice;
+        }
+        updateSellComputedFields();
+    }
+
+    document.getElementById('marketPriceBtn').addEventListener('click', () => setPriceMode('market'));
+    document.getElementById('limitPriceBtn').addEventListener('click', () => setPriceMode('limit'));
+
+    // 최종 판매 금액 / 판매 수익 - 수정 불가, 수량·단가 바뀔 때마다 자동 계산
+    function updateSellComputedFields() {
+        const qty = parseInt(quantity.value) || 0;
+        const unitPrice = parseInt(sellUnitPrice.value) || 0;
+        const total = qty * unitPrice;
+        const profit = Math.round((unitPrice - sellAvgPrice) * qty);
+
+        document.getElementById('sellTotalAmount').textContent = total.toLocaleString() + '원';
+
+        const profitEl = document.getElementById('sellProfit');
+        const dir = profit > 0 ? 'up' : profit < 0 ? 'down' : '';
+        profitEl.textContent = (profit >= 0 ? '+' : '') + profit.toLocaleString() + '원';
+        profitEl.className = dir;
+    }
+
+    sellUnitPrice.addEventListener('input', updateSellComputedFields);
 
     quantity.addEventListener('input', function() {
 
     if (parseInt(quantity.value) < 1 || quantity.value === '0') {
 
         quantity.value = 1;
-        orderPrice.value = modalStockPrice;
+        if (orderType === 'buy') orderPrice.value = modalStockPrice;
 
-        alert('1주 이상 매수 가능합니다.');
+        alert('1주 이상 주문 가능합니다.');
 
-    } else {
+    } else if (orderType === 'buy') {
         orderPrice.value = parseInt(quantity.value) * modalStockPrice;
     }
+
+    if (orderType === 'sell') updateSellComputedFields();
 });
 
     const submitBtn = document.getElementById("submit-btn");
     submitBtn.addEventListener('click', () => {
-        if(orderType == 'buy' && seed < parseInt(orderPrice.value)) {
+        const submitPrice = orderType === 'sell' ? (parseInt(sellUnitPrice.value) || 0) : modalStockPrice;
+        const submitTotal = orderType === 'sell'
+            ? (parseInt(quantity.value) || 0) * submitPrice
+            : (parseInt(orderPrice.value) || 0);
+
+        if(orderType == 'buy' && seed < submitTotal) {
             alert('보유 금액이 부족합니다.');
             return;
         }
@@ -286,13 +493,18 @@
             return;
         }
 
+        if (orderType === 'sell' && submitPrice <= 0) {
+            alert('판매 단가를 입력하세요.');
+            return;
+        }
+
         const action = orderType == 'buy' ? '매수' : '매도';
         const confirmed = confirm(
             `${action} 주문을 확정하시겠습니까?\n\n` +
             `종목: ${name}\n` +
             `수량: ${quantity.value}주\n` +
-            `단가: ${modalStockPrice.toLocaleString()}원\n` +
-            `총액: ${parseInt(orderPrice.value).toLocaleString()}원`
+            `단가: ${submitPrice.toLocaleString()}원\n` +
+            `총액: ${submitTotal.toLocaleString()}원`
         );
 
         if (!confirmed) return;
@@ -306,10 +518,14 @@
                 stockName: name,
                 orderType: orderType == 'buy' ? 'BUY' : 'SELL',
                 quantity: quantity.value,
-                price : modalStockPrice /* 단가 */
+                price : submitPrice /* 단가 */
             })
         }).then(r => r.json())
         .then(data => {
+            if (!data.orderId) {
+                alert(data.message || '주문이 거부되었습니다.');
+                return;
+            }
             alert('주문완료 : 주문번호 :' + data.orderId);
             closeModal();
         }).catch(() => {
@@ -318,6 +534,7 @@
     });
 
     connectSSE();
+    connectAskingPriceSSE();
 </script>
 <script src="/js/alarm.js"></script>
 </body>

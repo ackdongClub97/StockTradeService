@@ -27,11 +27,11 @@ public class Order {
 
     private int price;
 
-    private int matchedPrice;        // 체결 수량
+    private int matchedPrice;        // 가장 최근 체결가
 
     private int quantity;               // 주문 수량
 
-    private int matchedQuantity;        // 체결 수량
+    private int matchedQuantity;        // 누적 체결 수량 (Trade row들의 합과 일치해야 함)
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -20,10 +20,12 @@ import java.util.Map;
 public class KisController {
 
     private KisService kisService;
+    private KisWebSocketService kisWebSocketService;
 
     @Autowired
-    public KisController(KisService kisService) {
+    public KisController(KisService kisService, KisWebSocketService kisWebSocketService) {
         this.kisService = kisService;
+        this.kisWebSocketService = kisWebSocketService;
     }
 
     @GetMapping("/volume-rank")
@@ -76,5 +78,13 @@ public class KisController {
         return kisService.getStockDetailStream(code)
                 .map(data -> ServerSentEvent.builder()
                         .event("stock-detail").data((Object) data).build());
+    }
+
+    /* 실시간 호가(매수/매도 10단계) SSE 스트림 */
+    @GetMapping(value = "/stock/{code}/asking/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<Object>> getAskingPriceStream(@PathVariable String code) {
+        return kisWebSocketService.getAskingPriceStream(code)
+                .map(data -> ServerSentEvent.builder()
+                        .event("asking-price").data((Object) data).build());
     }
 }

@@ -5,6 +5,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -46,6 +47,11 @@ public class KisService {
     @Autowired
     private StockRepository stockRepository;
 
+    /* KisWebSocketService도 KisService(pushStockDetail)를 참조하므로 순환참조 방지를 위해 지연 주입 */
+    @Autowired
+    @Lazy
+    private KisWebSocketService kisWebSocketService;
+
 
     private String token;
     private boolean saveToday = false;
@@ -64,6 +70,8 @@ public class KisService {
     private final Sinks.Many<List<ResponseOutputDTO>> rankSink = Sinks.many().replay().latest();
     // 모든 user가 최신 주식 데이터 받을 수 있음
     private final Map<String,Sinks.Many<ResponseOutputDTO>> detailSink = new ConcurrentHashMap<>();
+    // 종목별 상세 sink가 없어도(=해당 종목 상세페이지를 아무도 안 보고 있어도) 가격 갱신을 알 수 있도록 하는 전역 sink - 보유주식 실시간 갱신 등에 사용
+    private final Sinks.Many<String> priceUpdateSink = Sinks.many().multicast().onBackpressureBuffer();
 
     @PostConstruct
     public void init() throws IOException, InterruptedException {
@@ -168,23 +176,24 @@ public class KisService {
                 .flatMap(this::parseFVolumeRank)
                 .retryWhen(
                         Retry.backoff(3, Duration.ofSeconds(1))
-                                .filter(e -> e instanceof PrematureChannelClosureException)
+                                .filter(this::isRetryable)
                                 .doBeforeRetry(s -> log.debug("랭킹 연결 재시도 중...."))
                 );
 
     }
 
+    /* 연결이 조기 종료됐거나(PrematureChannelClosureException), KIS 초당 호출 제한(EGW00201)에 걸린 경우엔
+       잠깐 기다렸다 다시 시도하면 대부분 해결되는 일시적 오류라서 재시도 대상으로 취급한다 */
+    private boolean isRetryable(Throwable e) {
+        return e instanceof PrematureChannelClosureException
+                || (e.getMessage() != null && e.getMessage().contains("EGW00201"));
+    }
+
     @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
     public void refreshRank() {
-
-        // 시간별로 장 구분
-        String timeChk;
-
-        if(isMarketOpen()) {
-            timeChk = "0";
-        } else if (isAfterMarket()) {
-            timeChk = "1";
-        } else {
+        // 실제로 확인해보니 본장(정규장) 외 시간엔 KIS가 살아있는 랭킹 데이터를 안 줌 - 본장에만 실시간 호출하고
+        // 나머지 시간엔 저장해둔 마지막(종가) 데이터를 그대로 재전송한다.
+        if(!isMarketOpen()) {
             if(!saveToday && !cachedData.isEmpty()) {
                 saveStockEndData(List.copyOf(cachedData));
                 saveToday = true;
@@ -195,17 +204,16 @@ public class KisService {
             }
             return;
         }
-        // 장 열리면 초기화
+
         saveToday = false;
 
-        getVolumeRank(timeChk).subscribe(
+        getVolumeRank("0").subscribe(
                 list -> {
                     cachedData.clear();
                     cachedData.addAll(list);
                     rankSink.tryEmitNext(List.copyOf(cachedData));
-                }, err -> log.error(err.getMessage(), err)
+                }, err -> log.error("[refreshRank] 조회 실패: {}", err.getMessage())
         );
-
     }
 
     /* ranking data 즉시 반환 */
@@ -215,23 +223,16 @@ public class KisService {
 
     /* SSE 스트림 */
     public Flux<List<ResponseOutputDTO>> getRankingStream(){
-        String timeChk = isMarketOpen() ? "0" : isAfterMarket() ? "1" : null;
-
         return rankSink.asFlux()
                 .doOnSubscribe(s -> {
-                            // 장마감 전
-                            if(timeChk != null) {
-                                getVolumeRank(timeChk).subscribe(
-                                        data -> rankSink.tryEmitNext(data),
-                                        err -> log.error("랭킹 조회 실패: {}",  err.getMessage())
-                                );
-                            } else {
-                                // 장마감 후
-                                if(!cachedData.isEmpty()) {
-                                    rankSink.tryEmitNext(List.copyOf(cachedData));
-                                    log.info("장마감 - 캐시 데이터 전송: {}", List.copyOf(cachedData));
-                                }
-                            }
+                    if(isMarketOpen()) {
+                        getVolumeRank("0").subscribe(
+                                data -> rankSink.tryEmitNext(data),
+                                err -> log.error("랭킹 조회 실패: {}", err.getMessage())
+                        );
+                    } else if(!cachedData.isEmpty()) {
+                        rankSink.tryEmitNext(List.copyOf(cachedData));
+                    }
                 });
     }
 
@@ -276,7 +277,7 @@ public class KisService {
                 .flatMap(this::parseStockDetail)
                 .retryWhen(
                         Retry.backoff(3, Duration.ofSeconds(1))
-                                .filter(e -> e instanceof PrematureChannelClosureException)
+                                .filter(this::isRetryable)
                                 .doBeforeRetry(s -> log.debug("detail 연결 재시도 중...."))
                 );
     }
@@ -287,46 +288,39 @@ public class KisService {
 
         return sink.asFlux()
                 .doOnSubscribe(s -> {
-                    log.info("{} 종목 조회", code);
-                    getStockDetail(code).subscribe(
-                        data -> sink.tryEmitNext(data),
-                        err -> log.error("{} 종목 조회 실패 / {}", code, err.getMessage())
-                    );
+                    log.info("{} 종목 실시간 구독", code);
+                    kisWebSocketService.subscribe(code);
+
+                    // subscribe()는 종목이 이미 구독중이면(=오늘 한 번이라도 봤으면) 웜업 조회를 다시 안 하므로,
+                    // 새로고침 등으로 새로 접속한 시점에 캐시된 마지막 값이 있으면 바로 하나 밀어준다.
+                    // (장마감 후엔 새 틱이 안 와서, 이게 없으면 재접속 시 영원히 빈 화면으로 남는다)
+                    ResponseOutputDTO cached = cachedStockData.get(code);
+                    if (cached != null) {
+                        sink.tryEmitNext(cached);
+                    }
                 })
                 .doOnCancel(() -> {
-                    detailSink.remove(code);
                     log.info("{} 종목 조회 종료", code);
                 })
-                .doOnTerminate(() -> {
-                    detailSink.remove(code);
-                })
-                .onErrorResume(e -> {           // ← 에러 시 새 Sink로 교체
+                // sink를 map에서 지우지 않는다 - replay().latest()가 마지막 값을 들고 있어야
+                // 재접속(새로고침) 시 새 틱 없이도 마지막 값을 바로 다시 보여줄 수 있다.
+                .onErrorResume(e -> {           // ← 에러 시에만 새 Sink로 교체
                     detailSink.remove(code);
                     return getStockDetailStream(code);
                 });
     }
 
-    @Scheduled(fixedDelay = 15000, initialDelay = 9000)
-    public void refreshStockDetail() {
-        if(detailSink.isEmpty()) return;
+    /* 웹소켓(KisWebSocketService)이 실시간 체결가를 받을 때마다 호출 - 캐시 갱신 + SSE sink emit */
+    public void pushStockDetail(String code, ResponseOutputDTO dto) {
+        cachedStockData.put(code, dto);
+        Sinks.Many<ResponseOutputDTO> sink = detailSink.get(code);
+        if(sink != null) sink.tryEmitNext(dto);
+        priceUpdateSink.tryEmitNext(code);
+    }
 
-        if(!isMarketOpen()) {
-            /*log.info("장 마감 시간 detail 조회 스킵");*/
-            return;
-        }
-        log.info("refresh detail");
-        detailSink.keySet().forEach(code ->
-                getStockDetail(code)
-                        .delaySubscription(Duration.ofSeconds(1))
-                        .subscribe(
-                        data -> {
-                            cachedStockData.put(code, data);
-                            Sinks.Many<ResponseOutputDTO> sink = detailSink.get(code);
-                            if(sink != null) {
-                                sink.tryEmitNext(data);
-                            }
-                        }, err -> log.error("stock detail error: {} / {}", code ,err.getMessage())
-                ));
+    /* 특정 종목 상세페이지를 아무도 안 보고 있어도 가격 갱신 여부를 알 수 있는 전역 스트림 (예: 보유주식 실시간 갱신용) */
+    public Flux<String> getPriceUpdateStream() {
+        return priceUpdateSink.asFlux();
     }
 
     public boolean isMarketOpen() {
@@ -349,6 +343,12 @@ public class KisService {
         boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
 
         return isWeekday && now.isAfter(open) && now.isBefore(close);
+    }
+
+    /* 주문 접수 시작 시각(오전 8시) 이전인지 - 이 시간 전에는 주문 자체를 받지 않음 */
+    public boolean isBeforeOrderWindow() {
+        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
+        return now.isBefore(LocalTime.of(8, 0));
     }
 
     /*  장마감 데이터 저장  */

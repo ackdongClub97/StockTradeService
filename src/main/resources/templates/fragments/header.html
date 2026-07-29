@@ -10,14 +10,21 @@
             <div class="main-title">모의투자 시스템</div>
             <div class="sub-title">한국투자증권 open api 활용</div>
         </div>
-
-
     </a>
     <div>
-        <span class="name" sec:authorize="isAuthenticated()" sec:authentication="principal.member.name"></span><span class="name" sec:authorize="isAuthenticated()"> 님</span> |  </span>
+        <a th:href="@{/myPage}">
+            <span class="name" sec:authorize="isAuthenticated()" sec:authentication="principal.member.name"></span><span class="name" sec:authorize="isAuthenticated()"> 님 | </span>
+        </a>
         <a th:href="@{/login}" class="login_btn" sec:authorize="isAnonymous()">logIn/join</a>
-        <a th:href="@{/logout}" class="login_btn" sec:authorize="isAuthenticated()">logOut</a>
+        <!-- Spring Security 기본 로그아웃 필터는 POST만 매칭하므로 GET 링크로는 동작하지 않음 -->
+        <form th:action="@{/logout}" method="post" class="logout-form" sec:authorize="isAuthenticated()">
+            <button type="submit" class="login_btn logout-btn">logOut</button>
+        </form>
     </div>
+
+    <!-- 비로그인 상태에서 /api/member/info 등 인증 필요한 API를 아예 호출하지 않도록 서버에서 로그인 여부를 미리 내려줌 -->
+    <script sec:authorize="isAuthenticated()" th:inline="none">window.__authenticated = true;</script>
+    <script sec:authorize="isAnonymous()" th:inline="none">window.__authenticated = false;</script>
 
 </header>
 

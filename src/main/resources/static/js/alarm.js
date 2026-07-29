@@ -31,8 +31,6 @@ function sendNotification(data) {
 
 requestNotificationPermission();
 
-fetch('/api/member/info')
-.then(r => {
-    if(r.ok) connectOrderStream();
-})
-.catch(() => {});
+if (window.__authenticated) {
+    connectOrderStream();
+}
