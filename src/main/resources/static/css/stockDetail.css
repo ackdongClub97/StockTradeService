@@ -446,6 +446,11 @@
             display: flex;
             flex-direction: column;
             gap: 18px;
+
+            /* 기본 크기(내용에 맞는 높이)는 그대로 두고, 화면이 작아서 그 높이가 뷰포트를 넘칠 때만 팝업 안에서 스크롤되게 함 */
+            max-height: 94vh;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         /* 상단 */
@@ -573,6 +578,40 @@
         .readonly-info-row span.up   { color: #ff3b5c; }
         .readonly-info-row span.down { color: #00e0a3; }
 
+        .price-hint {
+            margin-top: 8px;
+            padding: 12px 14px;
+            background: #23262f;
+            border-radius: 10px;
+        }
+
+        .limit-feature-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #eee;
+        }
+
+        .limit-feature-check input[type="checkbox"] {
+            accent-color: #2979ff;
+        }
+
+        .price-hint-desc {
+            margin: 8px 0 0;
+            font-size: 12px;
+            color: #999;
+            line-height: 1.5;
+        }
+
+        .price-hint-warning {
+            margin: 8px 0 0;
+            font-size: 12px;
+            color: #ffb020;
+            line-height: 1.5;
+        }
+
         /* 주문 버튼 */
         .submit-btn {
             margin-top: 10px;
@@ -677,9 +716,10 @@
       /* 모달 */
       .modal-content {
         width: calc(100% - 32px);
-        margin: 20% auto;
+        margin: 6% auto;
         padding: 20px 16px;
         gap: 14px;
+        max-height: 92vh;
       }
 
       .modal-top h2 {

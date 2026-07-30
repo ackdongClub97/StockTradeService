@@ -76,10 +76,37 @@
                     <input id="quantity" type="number" placeholder="수량 입력">
                 </div>
 
-                <!-- 매수 전용: 기존 방식 그대로(현재가로 총액 자동 계산) -->
-                <div class="input-group" id="buyPriceGroup">
-                    <label>주문 가격</label>
-                    <input id="orderPrice" type="number" placeholder="가격 입력">
+                <!-- 매수 전용: 현재가/지정가 선택 + 단가/최종금액 -->
+                <div id="buyPriceSection" style="display:none;">
+                    <div class="price-mode-tabs">
+                        <button type="button" class="price-mode-btn active" id="buyMarketPriceBtn" data-mode="market">현재가</button>
+                        <button type="button" class="price-mode-btn" id="buyLimitPriceBtn" data-mode="limit">지정가</button>
+                    </div>
+
+                    <div class="input-group">
+                        <label>매수 단가 (1주)</label>
+                        <input id="buyUnitPrice" type="number" readonly>
+                    </div>
+
+                    <div class="readonly-info-group">
+                        <div class="readonly-info-row">
+                            <span>최종 매수 금액</span>
+                            <span id="buyTotalAmount">0원</span>
+                        </div>
+                    </div>
+
+                    <div class="price-hint" id="buyPriceHint" style="display:none;">
+                        <label class="limit-feature-check">
+                            <input type="checkbox" checked disabled>
+                            자동 가격개선 (최대 5% 낮은 가격까지)
+                        </label>
+                        <p class="price-hint-desc">
+                            지정하신 가격보다 저렴한 매도 호가가 있으면, 지정가 대비 최대 5% 낮은 범위 안에서 더 유리한 가격으로 자동 체결됩니다. 5%를 초과해서 저렴한 호가는 자동 체결 대상에서 제외됩니다.
+                        </p>
+                        <p class="price-hint-warning">
+                            ⚠️ 지정하신 가격 또는 그보다 낮은 가격에 반드시 체결되는 것은 아닙니다. 해당 가격대의 매도 물량이 없으면 체결되지 않고 대기(미체결) 상태로 남을 수 있습니다.
+                        </p>
+                    </div>
                 </div>
 
                 <!-- 매도 전용: 현재가/지정가 선택 + 단가/최종금액/수익 -->
@@ -206,12 +233,16 @@
             priceEl.textContent = fmtPrice(data.stckPrpr);
             document.getElementById('stockData3').value = data.stckPrpr;
 
-            // 매도 모달이 "현재가" 모드로 열려있는 동안엔 실시간 체결가를 계속 반영
+            // 매수/매도 모달이 "현재가" 모드로 열려있는 동안엔 실시간 체결가를 계속 반영
             modalStockPrice = parseInt(data.stckPrpr) || 0;
-            if (orderType === 'sell' && priceMode === 'market'
-                    && document.getElementById('tradeModal').style.display === 'block') {
+            const modalOpen = document.getElementById('tradeModal').style.display === 'block';
+            if (orderType === 'sell' && priceMode === 'market' && modalOpen) {
                 sellUnitPrice.value = modalStockPrice;
                 updateSellComputedFields();
+            }
+            if (orderType === 'buy' && buyPriceMode === 'market' && modalOpen) {
+                buyUnitPrice.value = modalStockPrice;
+                updateBuyComputedFields();
             }
 
             const changeEl = document.getElementById('priceChange');
@@ -350,6 +381,7 @@
     let maxQty = 0;
     let sellAvgPrice = 0;
     let priceMode = 'market'; // 'market' | 'limit' - 매도 전용
+    let buyPriceMode = 'market'; // 'market' | 'limit' - 매수 전용
 
     function openModal(type) {
         orderType = type;
@@ -358,7 +390,7 @@
         const title = document.getElementById('modalTitle');
         const submitBtn = document.querySelector('.submit-btn');
         const price = document.getElementById('stockPrice');
-        const buyPriceGroup = document.getElementById('buyPriceGroup');
+        const buyPriceSection = document.getElementById('buyPriceSection');
         const sellPriceSection = document.getElementById('sellPriceSection');
 
         const clickPrice = parseInt(document.getElementById('stockData3').value || 0);
@@ -372,9 +404,9 @@
             submitBtn.innerText = '매수하기';
             submitBtn.style.background = 'linear-gradient(135deg, #ff3b5c, #ff6b81)';
 
-            buyPriceGroup.style.display = 'flex';
+            buyPriceSection.style.display = 'block';
             sellPriceSection.style.display = 'none';
-            orderPrice.value = '';
+            setBuyPriceMode('market');
 
             // 매수 가능 수량 계산
             fetch('/api/member/info')
@@ -391,7 +423,7 @@
             submitBtn.innerText = '매도하기';
             submitBtn.style.background = 'linear-gradient(135deg, #2979ff, #5393ff)';
 
-            buyPriceGroup.style.display = 'none';
+            buyPriceSection.style.display = 'none';
             sellPriceSection.style.display = 'block';
             setPriceMode('market');
 
@@ -411,13 +443,13 @@
 
     function closeModal() {
         document.getElementById('quantity').value = 0;
-        document.getElementById('orderPrice').value = 0;
+        document.getElementById('buyUnitPrice').value = '';
         document.getElementById('sellUnitPrice').value = '';
         document.getElementById('tradeModal').style.display = 'none';
     }
 
     const quantity = document.getElementById('quantity');
-    const orderPrice = document.getElementById('orderPrice');
+    const buyUnitPrice = document.getElementById('buyUnitPrice');
     const sellUnitPrice = document.getElementById('sellUnitPrice');
 
     function setPriceMode(mode) {
@@ -437,6 +469,35 @@
 
     document.getElementById('marketPriceBtn').addEventListener('click', () => setPriceMode('market'));
     document.getElementById('limitPriceBtn').addEventListener('click', () => setPriceMode('limit'));
+
+    function setBuyPriceMode(mode) {
+        buyPriceMode = mode;
+        document.getElementById('buyMarketPriceBtn').classList.toggle('active', mode === 'market');
+        document.getElementById('buyLimitPriceBtn').classList.toggle('active', mode === 'limit');
+        document.getElementById('buyPriceHint').style.display = mode === 'limit' ? 'block' : 'none';
+
+        if (mode === 'market') {
+            buyUnitPrice.readOnly = true;
+            buyUnitPrice.value = modalStockPrice;
+        } else {
+            buyUnitPrice.readOnly = false;
+            if (!buyUnitPrice.value) buyUnitPrice.value = modalStockPrice;
+        }
+        updateBuyComputedFields();
+    }
+
+    document.getElementById('buyMarketPriceBtn').addEventListener('click', () => setBuyPriceMode('market'));
+    document.getElementById('buyLimitPriceBtn').addEventListener('click', () => setBuyPriceMode('limit'));
+
+    // 최종 매수 금액 - 수정 불가, 수량·단가 바뀔 때마다 자동 계산
+    function updateBuyComputedFields() {
+        const qty = parseInt(quantity.value) || 0;
+        const unitPrice = parseInt(buyUnitPrice.value) || 0;
+        const total = qty * unitPrice;
+        document.getElementById('buyTotalAmount').textContent = total.toLocaleString() + '원';
+    }
+
+    buyUnitPrice.addEventListener('input', updateBuyComputedFields);
 
     // 최종 판매 금액 / 판매 수익 - 수정 불가, 수량·단가 바뀔 때마다 자동 계산
     function updateSellComputedFields() {
@@ -458,25 +519,20 @@
     quantity.addEventListener('input', function() {
 
     if (parseInt(quantity.value) < 1 || quantity.value === '0') {
-
         quantity.value = 1;
-        if (orderType === 'buy') orderPrice.value = modalStockPrice;
-
         alert('1주 이상 주문 가능합니다.');
-
-    } else if (orderType === 'buy') {
-        orderPrice.value = parseInt(quantity.value) * modalStockPrice;
     }
 
+    if (orderType === 'buy') updateBuyComputedFields();
     if (orderType === 'sell') updateSellComputedFields();
 });
 
     const submitBtn = document.getElementById("submit-btn");
     submitBtn.addEventListener('click', () => {
-        const submitPrice = orderType === 'sell' ? (parseInt(sellUnitPrice.value) || 0) : modalStockPrice;
-        const submitTotal = orderType === 'sell'
-            ? (parseInt(quantity.value) || 0) * submitPrice
-            : (parseInt(orderPrice.value) || 0);
+        const submitPrice = orderType === 'sell'
+            ? (parseInt(sellUnitPrice.value) || 0)
+            : (parseInt(buyUnitPrice.value) || 0);
+        const submitTotal = (parseInt(quantity.value) || 0) * submitPrice;
 
         if(orderType == 'buy' && seed < submitTotal) {
             alert('보유 금액이 부족합니다.');
@@ -493,8 +549,8 @@
             return;
         }
 
-        if (orderType === 'sell' && submitPrice <= 0) {
-            alert('판매 단가를 입력하세요.');
+        if (submitPrice <= 0) {
+            alert('단가를 입력하세요.');
             return;
         }
 
@@ -518,7 +574,8 @@
                 stockName: name,
                 orderType: orderType == 'buy' ? 'BUY' : 'SELL',
                 quantity: quantity.value,
-                price : submitPrice /* 단가 */
+                price : submitPrice, /* 단가 */
+                priceMode: (orderType == 'buy' ? buyPriceMode : priceMode).toUpperCase()
             })
         }).then(r => r.json())
         .then(data => {

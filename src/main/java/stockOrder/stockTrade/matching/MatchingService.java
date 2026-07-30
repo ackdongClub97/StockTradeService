@@ -15,6 +15,7 @@ import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderRepository;
 import stockOrder.stockTrade.order.OrderStatus;
 import stockOrder.stockTrade.order.OrderType;
+import stockOrder.stockTrade.order.PriceMode;
 import stockOrder.stockTrade.order.RealizedPnlService;
 import stockOrder.stockTrade.order.Trade;
 import stockOrder.stockTrade.order.TradeRepository;
@@ -101,7 +102,23 @@ public class MatchingService {
         }
     }
 
+    /* 매수 자동 가격개선 하한 비율 - 지정가보다 5%를 초과해서 낮은 호가는 "너무 좋은 게 이상하다"고 보고 자동체결 대상에서 제외 */
+    private static final double BUY_IMPROVEMENT_FLOOR_RATIO = 0.95;
+
+    private boolean isEligible(int levelPrice, Order order, boolean isBuy) {
+        if (isBuy) {
+            // 5% 자동 가격개선 밴드는 지정가(LIMIT) 매수 전용 기능 - 현재가(MARKET) 매수는 밴드 없이 지정가 이하 최우선호가로만 체결
+            if (order.getPriceMode() != PriceMode.LIMIT) {
+                return levelPrice <= order.getPrice();
+            }
+            int minEligiblePrice = (int) Math.ceil(order.getPrice() * BUY_IMPROVEMENT_FLOOR_RATIO);
+            return levelPrice <= order.getPrice() && levelPrice >= minEligiblePrice;
+        }
+        return levelPrice >= order.getPrice();
+    }
+
     /* 지정가 조건에 맞는 호가 레벨들의 잔량 합만큼만 체결(부분체결 가능). 체결가는 그 중 가장 유리한(최우선) 호가.
+       매수는 지정가 대비 5%를 초과해서 낮은 호가는 자동개선 대상에서 제외(그만큼은 미체결로 남김).
        실제로 체결시킨 만큼은 levels에서 차감해서 같은 회차의 다음 주문이 중복으로 못 먹게 한다. */
     private FillPlan computeFill(Order order, BookLevels levels, int remainQty, boolean isBuy) {
         Integer fillPrice = null;
@@ -110,9 +127,7 @@ public class MatchingService {
         for (int i = 0; i < levels.prices.length; i++) {
             int levelPrice = levels.prices[i];
             if (levelPrice <= 0 || levels.volumes[i] <= 0) continue;
-
-            boolean eligible = isBuy ? levelPrice <= order.getPrice() : levelPrice >= order.getPrice();
-            if (!eligible) continue;
+            if (!isEligible(levelPrice, order, isBuy)) continue;
 
             fillableQty += levels.volumes[i];
             if (fillPrice == null) fillPrice = levelPrice; // 배열은 1호가부터 순서대로 옴 - 첫 적중이 최우선호가
@@ -127,9 +142,7 @@ public class MatchingService {
         for (int i = 0; i < levels.prices.length && remaining > 0; i++) {
             int levelPrice = levels.prices[i];
             if (levelPrice <= 0 || levels.volumes[i] <= 0) continue;
-
-            boolean eligible = isBuy ? levelPrice <= order.getPrice() : levelPrice >= order.getPrice();
-            if (!eligible) continue;
+            if (!isEligible(levelPrice, order, isBuy)) continue;
 
             int take = (int) Math.min(remaining, levels.volumes[i]);
             levels.volumes[i] -= take;

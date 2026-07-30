@@ -46,36 +46,20 @@ Unable to acquire JDBC Connection
 
 ---
 
-# Issue: 종목 상세페이지 실시간 시세가 재접속(새로고침) 시 표시되지 않음
+# Issue: 매수 지정가 기능 업데이트 중 발생한 트러블슈팅 - 작은 화면에서 주문 팝업이 잘림
 
 ## 문제
 
-종목 상세페이지에서 실시간 시세(체결가) 로딩이 끝나지 않거나, 새로고침해도 계속 데이터가 안 뜸. 서버 로그에는 다음과 같은 KIS 호출 실패가 찍혀 있었음:
-
-```
-[KisWS] 구독 요청: H0STCNT0 / 005930
-ERROR ... KIS ERROR BODY = {"rt_cd":"1","msg1":"초당 거래건수를 초과하였습니다.","msg_cd":"EGW00201", ...}
-WARN  ... [KisWS] 005930 웜업 조회 실패: {...EGW00201...}
-```
-
-"새로고침하면 다시 나오겠지" 하고 새로고침해봐도 여전히 데이터가 안 나옴.
+매수 지정가(현재가/지정가 토글, 자동 가격개선 안내 체크박스, 설명·경고 문구) UI를 추가하면서 주문 팝업(`#tradeModal .modal-content`)의 세로 길이가 늘어났는데, 모니터 화면(뷰포트) 높이가 작은 환경에서는 팝업 하단(주문 버튼 포함)이 화면 밖으로 밀려 잘리고 스크롤할 방법도 없어 주문 자체를 못 누르는 상태가 됨.
 
 ## 원인
 
-두 가지가 겹쳐 있었음.
-
-1. **KIS 초당 호출 제한(EGW00201) 에러에 대한 재시도가 없었음.** 기존 `getVolumeRank`/`getStockDetail`의 재시도 로직(`Retry.backoff`)은 `PrematureChannelClosureException`(연결 조기 종료)만 재시도 대상으로 삼고 있어서, rate-limit 에러는 한 번 실패하면 그걸로 끝. 그리고 프론트엔드는 로딩 오버레이를 10초 뒤 안전장치로 그냥 숨기기만 할 뿐, 데이터가 실제로 왔는지 여부와 무관하게 조용히 넘어가서 "로딩은 끝났는데 화면엔 아무것도 없는" 상태가 됐음.
-
-2. **(더 근본적인 원인) `KisService.getStockDetailStream()`가 연결이 끊길 때마다 `detailSink`에서 해당 종목의 Sink를 지우고 있었음.** 반면 `KisWebSocketService.subscribedCodes`는 한 번 구독된 종목을 계속 구독 상태로 유지하며, 이미 구독된 종목이면 웜업(REST) 조회를 다시 하지 않는 구조. 그래서 새로고침 → 새 빈 Sink 생성 → `subscribe()`는 "이미 구독중"이라 웜업 재조회 안 함 → 장중이면 곧 새 웹소켓 틱이 와서 채워지니 못 느꼈지만, **장마감 후처럼 새 틱이 영영 안 오는 시간대엔 재접속해도 그 Sink가 영원히 비어있는 상태**로 남음.
-
-   - 이 과정에서 "장마감 저장 로직 자체가 잘못된 것 아니냐"는 의심이 있었는데, H2 콘솔로 `STOCK` 테이블을 직접 확인한 결과 오늘(2026-07-29) 30건, 어제(2026-07-28) 30건이 정상적으로 저장돼 있었음 — 랭킹 장마감 저장(`saveStockEndData`) 로직 자체는 문제 없음을 확인하고 배제.
+`.modal-content`에 높이 제한(`max-height`)이나 `overflow` 속성이 전혀 없었음. 배경 오버레이인 `.modal`은 `position: fixed`로 뷰포트 전체를 덮지만 그 자체에도 스크롤 설정이 없어서, 내부 `.modal-content`가 뷰포트보다 커지면 초과분이 그대로 화면 밖으로 넘어가 시각적으로 사라짐(스크롤 불가능하게 잘림).
 
 ## 해결
 
-1. **rate-limit 에러도 재시도 대상에 포함**: `KisService`에 `isRetryable(Throwable)` 헬퍼 추가, `PrematureChannelClosureException` 외에 메시지에 `EGW00201`이 포함된 경우도 재시도하도록 `getVolumeRank`/`getStockDetail`의 필터 조건 확장.
-2. **로딩이 끝나도 데이터가 없으면 에러 화면 표시**: `stockDetail.html`, `stockHome.html` 둘 다 10초 안전장치 타이머를 "조용히 숨기기"에서 "데이터 도착 여부 체크 → 없으면 스피너 멈추고 `불러오지 못했습니다` + `다시 시도` 버튼 노출(클릭 시 `location.reload()`)"로 변경.
-3. **(근본 수정) Sink를 연결 종료 시 더 이상 지우지 않음**: `getStockDetailStream()`의 `doOnCancel`/`doOnTerminate`에서 `detailSink.remove(code)` 제거. `replay().latest()` Sink가 마지막 값을 계속 들고 있다가 재접속 시 바로 재생(replay)해줌. 추가로 `doOnSubscribe` 시점에 `cachedStockData`에 값이 있으면 즉시 한 번 더 emit하는 안전장치도 넣음. (에러로 인한 재구성 시에는 기존대로 `onErrorResume`에서 Sink를 지우고 새로 만듦 — 이 경우는 정상적인 정리가 맞음)
+`.modal-content`에 `max-height` + `overflow-y: auto`(+`overflow-x: hidden`)를 추가해서, 내용이 뷰포트를 넘칠 때만 팝업 내부에서 자체적으로 스크롤되게 함. 처음엔 `max-height: 85vh`로 잡았는데, 화면이 충분히 큰 환경에서도 팝업 기본 높이가 줄어드는 것처럼 보인다는 피드백을 받아 `94vh`(모바일은 `92vh`)로 올려서, 화면이 실제로 부족할 때만 스크롤이 개입하고 평소엔 기존과 동일한 높이로 보이도록 재조정.
 
-관련 파일: `KisService.java` (`isRetryable`, `getStockDetailStream` 수정), `stockDetail.html`/`stockHome.html` + 각 css (로딩 에러 화면/재시도 버튼).
+관련 파일: `stockDetail.css`(`.modal-content` 및 모바일 미디어쿼리 내 `.modal-content`).
 
-컴파일 확인 완료. Java 코드 변경이라 재시작 후 실제 재현 테스트 필요 (아직 안 함).
+CSS 변경이라 컴파일 불필요. 실제 작은 화면에서의 렌더링 재현 테스트는 아직 브라우저로 안 해봄.

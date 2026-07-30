@@ -24,6 +24,8 @@ public class Order {
     private OrderType orderType;
     @Enumerated(EnumType.STRING)
     private OrderStatus orderStatus;
+    @Enumerated(EnumType.STRING)
+    private PriceMode priceMode; // 현재가(MARKET)/지정가(LIMIT) - 매수 자동 가격개선(5% 밴드)은 LIMIT에서만 적용
 
     private int price;
 

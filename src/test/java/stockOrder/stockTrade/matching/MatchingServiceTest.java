@@ -17,6 +17,7 @@ import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderRepository;
 import stockOrder.stockTrade.order.OrderStatus;
 import stockOrder.stockTrade.order.OrderType;
+import stockOrder.stockTrade.order.PriceMode;
 import stockOrder.stockTrade.order.RealizedPnlService;
 import stockOrder.stockTrade.order.Trade;
 import stockOrder.stockTrade.order.TradeRepository;
@@ -64,6 +65,7 @@ class MatchingServiceTest {
         order.setStockName("삼성전자");
         order.setOrderType(OrderType.BUY);
         order.setOrderStatus(OrderStatus.PENDING);
+        order.setPriceMode(PriceMode.LIMIT); // 이 테스트들은 모두 지정가 매수 시나리오
         order.setPrice(price);
         order.setQuantity(quantity);
         order.setMatchedQuantity(0);
@@ -174,5 +176,52 @@ class MatchingServiceTest {
         assertEquals(3, order.getMatchedQuantity(), "체결 가능한 호가가 없으면 누적 체결수량이 그대로여야 한다");
         assertEquals(OrderStatus.PARTIAL, order.getOrderStatus());
         verify(tradeRepository, times(1)).save(any(Trade.class)); // 추가 Trade 없이 여전히 1번만 호출됨
+    }
+
+    /* 매도호가 두 단계를 서로 다른 가격으로 채운 10단계 스냅샷 생성 */
+    private AskingPriceDTO askingPriceWithTwoLevels(String price0, String vol0, String price1, String vol1) {
+        AskingPriceDTO dto = askingPriceWith(price0, vol0);
+        dto.getAskPrices()[1] = price1;
+        dto.getAskVolumes()[1] = vol1;
+        return dto;
+    }
+
+    @Test
+    @DisplayName("3. 매수 지정가 자동 가격개선 - 지정가 대비 5% 이내로 낮은 호가는 자동 체결되지만, 5%를 초과해서 낮은 호가는 체결 대상에서 제외된다")
+    void 지정가_매수는_지정가_대비_5퍼센트_이내의_저렴한_호가로만_자동_체결된다() {
+        // 지정가 100,000원 매수 10주. 매도호가 1단계는 96,000원(4% 저렴, 밴드 내) 5주, 2단계는 90,000원(10% 저렴, 밴드 밖) 5주.
+        Order order = newBuyOrder(10, 100_000);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(5, order.getMatchedQuantity(), "밴드(지정가의 95~100%) 안에 있는 96,000원 호가 물량(5주)만 체결돼야 한다");
+        assertEquals(OrderStatus.PARTIAL, order.getOrderStatus(), "밴드 밖의 90,000원 호가 5주는 체결되지 않아 PARTIAL로 남아야 한다");
+
+        ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
+        verify(tradeRepository, times(1)).save(tradeCaptor.capture());
+        assertEquals(96000, tradeCaptor.getValue().getMatchedPrice(), "체결가는 밴드 안의 유일한 호가인 96,000원이어야 한다");
+    }
+
+    @Test
+    @DisplayName("4. 현재가(시장가) 매수는 5% 밴드 제한 없이 지정가 이하 호가면 전부 체결 대상이다")
+    void 현재가_매수는_5퍼센트_밴드_제한을_받지_않는다() {
+        // 현재가 매수 100,000원 10주. 매도호가 1단계는 96,000원(밴드 내) 5주, 2단계는 90,000원(밴드 밖) 5주 - 지정가 매수라면 90,000원은 체결 안 되지만, 현재가 매수는 밴드가 없으므로 둘 다 체결돼야 한다.
+        Order order = newBuyOrder(10, 100_000);
+        order.setPriceMode(PriceMode.MARKET);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(10, order.getMatchedQuantity(), "현재가 매수는 밴드 제한이 없으므로 두 호가 물량(5+5주) 모두 체결돼야 한다");
+        assertEquals(OrderStatus.MATCHED, order.getOrderStatus());
     }
 }
