@@ -444,7 +444,10 @@
               </table>`;
 
             el.querySelectorAll('.cancel-order-btn').forEach(btn => {
-                btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, loadHistory));
+                btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, () => {
+                    loadHistory();
+                    refreshSeed();
+                }));
             });
 
             markStockContentReady('history');

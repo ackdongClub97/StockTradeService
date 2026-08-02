@@ -35,6 +35,7 @@ There is no configured linter in this repo.
 - `news` — proxies Naver News search API for stock-related news.
 - `security` — `SecurityConfig`, form login, permitAll routes for public pages/APIs.
 - `view` — `PageController`, Thymeleaf page routes (`/stockHome`, `/stock/{code}`, `/login`, `/join`, `/myPage`).
+- `admin` — ops/monitoring for unfilled orders (see "Order monitoring / admin" below).
 
 ### Order flow (the core piece to understand before touching order/matching code)
 1. `POST /api/order/create` (`OrderController`) persists the order as `PENDING` and publishes it onto the Kafka topic `stock-order` via `OrderService.sendOrder`.
@@ -53,6 +54,12 @@ There is no configured linter in this repo.
 - `MatchingService.matching()`/`tryMatch()` read `kisService.getCachedStockData(code)` first (populated by the websocket) and only fall back to a REST call when the cache is empty (brand-new code, no tick yet) — same call-and-ensure-subscribed pattern as the detail page.
 - Both KIS REST calls retry up to 3x with backoff only on `PrematureChannelClosureException`; other errors propagate and are logged with the raw KIS error body.
 
+### Order monitoring / admin (`admin` package)
+- `Order` carries `lastUnmatchedReason` (`UnmatchReason`: `NO_ELIGIBLE_PRICE` / `NO_ORDERBOOK_DATA` / `SYSTEM_ERROR`) + `lastAttemptAt`, set on every match attempt in `MatchingService` (`matching()`, `tryMatch()`, `execute()`) so a stuck `PENDING`/`PARTIAL` order's cause is queryable instead of only living in logs. `execute()` and the per-stock-code loop in `matching()` are wrapped in try/catch so one order/stock throwing (typically a DB/HikariCP issue) doesn't abort the rest of the batch — those get tagged `SYSTEM_ERROR` and published to `AdminAlertService`'s SSE sink.
+- `GET /admin/orders` (Thymeleaf, `adminOrders.html`) lists all `PENDING`/`PARTIAL` orders with their reason, and a "로그 보기" button that queries Loki directly (`LokiClient`, `GET /api/admin/logs`) for that order's log lines around `lastAttemptAt` — no Grafana needed from this screen, though Grafana Explore works too.
+- Access to `/admin/**` and `/api/admin/**` is gated by comparing the logged-in member's id against `admin.member-id` (env `ADMIN_MEMBER_ID`, blank by default = nobody can access) inside `AdminController` — there's no role/authority system in this app (`CustomerDetails.getAuthorities()` always returns `ROLE_USER`), so don't reach for `hasRole(...)` here.
+- Local log pipeline for this to work: `observability/docker-compose.yml` runs Loki + Grafana (`docker compose up -d` from that directory); the app pushes logs to Loki directly via a Logback appender (`logback-spring.xml`, `loki-logback-appender`) — no Promtail/file tailing involved. `LOKI_URL` env var points both the appender and `LokiClient` elsewhere if not localhost. `observability/export-logs.sh` bulk-exports a time range via Loki's HTTP API for offline analysis.
+
 ### Security
 - Session-based form login + Kakao OAuth2 login (`SecurityConfig`), CSRF disabled, H2 console frame options relaxed to same-origin.
 - `PasswordConfig` (separate `@Configuration` class) owns the `BCryptPasswordEncoder` bean — it used to live in `SecurityConfig`, but `SecurityConfig` now depends on `KakaoOAuth2UserService`, which depends on the encoder, which would have made `SecurityConfig` depend on itself. Keep the encoder bean out of `SecurityConfig` (or any class `SecurityConfig` depends on) to avoid reintroducing that cycle.
@@ -63,3 +70,6 @@ There is no configured linter in this repo.
 - `src/main/resources/application.yaml` is the dev/default config; `application-prod.yml` overrides for the EC2 deployment.
 - `hantu-openapi.appUrl` points at the KIS **mock/paper-trading** endpoint (`openapivts...`); the real endpoint is present but commented out.
 - KIS, Naver, and Kakao credentials (`HANTU_APP_KEY`, `HANTU_APP_SECRET`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `KAKAO_CLIENT_ID`, `KAKAO_CLIENT_SECRET`) are read from env vars / an optional gitignored `application-secret.yaml` at the repo root (see `application-secret.yaml.example`) — they are **not** committed. Do not hardcode real credentials back into `application.yaml`.
+
+## Documentation guidelines
+- When updating README.md or issue.md, include throughput/latency/performance numbers only if they come from an actual measurement (a load test run, a real log, a benchmark). Never invent or estimate figures to fill in a metrics section — leave it out if nothing's been measured.

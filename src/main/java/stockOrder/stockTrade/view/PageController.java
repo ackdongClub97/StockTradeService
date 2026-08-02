@@ -1,5 +1,6 @@
 package stockOrder.stockTrade.view;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Controller;
@@ -17,6 +18,9 @@ import stockOrder.stockTrade.member.MemberService;
 public class PageController {
 
     private MemberRepository memberRepository;
+
+    @Value("${admin.member-id:}")
+    private String adminMemberId;
 
     public PageController(MemberRepository memberRepository) {
         this.memberRepository = memberRepository;
@@ -49,7 +53,13 @@ public class PageController {
 
     @GetMapping("/myPage")
     public String myPage(Model model, @AuthenticationPrincipal CustomerDetails user) {
-        Member member = memberRepository.findMemberInfo(user.getMember().getMemberId());
+        String memberId = user.getMember().getMemberId();
+
+        if (adminMemberId != null && !adminMemberId.isBlank() && adminMemberId.equals(memberId)) {
+            return "redirect:/admin/orders";
+        }
+
+        Member member = memberRepository.findMemberInfo(memberId);
         model.addAttribute("member", member);
         return "myPage";
     }

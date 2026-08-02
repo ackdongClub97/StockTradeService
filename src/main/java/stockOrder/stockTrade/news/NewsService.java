@@ -27,11 +27,15 @@ public class NewsService {
 
      /* naver news */
      public Mono<List<HashMap<String, String>>> getStockDetailNews(String stockName) {
+         return getStockDetailNews(stockName, 5);
+     }
+
+     public Mono<List<HashMap<String, String>>> getStockDetailNews(String stockName, int display) {
          return WebClient.create("https://openapi.naver.com")
                  .get()
                  .uri(uriBuilder -> uriBuilder.path("/v1/search/news.json")
                          .queryParam("query", stockName)
-                         .queryParam("display", 5)
+                         .queryParam("display", display)
                          .queryParam("start", 1)
                          .queryParam("sort", "date")
                          .build()

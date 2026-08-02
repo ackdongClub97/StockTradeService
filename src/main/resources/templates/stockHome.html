@@ -200,7 +200,8 @@
     wrap.classList.add('flash');
   }
 
-  if (window.__authenticated) {
+  function refreshSeed() {
+    if (!window.__authenticated) return;
     fetch('/api/member/info')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -210,6 +211,7 @@
       })
       .catch(() => {});
   }
+  refreshSeed();
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -451,7 +453,10 @@
                     </table>`;
 
                 el.querySelectorAll('.cancel-order-btn').forEach(btn => {
-                    btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, loadHistory));
+                    btn.addEventListener('click', () => cancelOrder(btn.dataset.orderId, () => {
+                        loadHistory();
+                        refreshSeed();
+                    }));
                 });
 
             })

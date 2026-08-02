@@ -34,6 +34,10 @@ public interface OrderRepository extends JpaRepository<Order, String> {
     @Query("SELECT MAX(o.orderId) FROM Order o WHERE o.orderId LIKE :prefix%")
     String findMaxOrderIdByPrefix(@Param("prefix") String prefix);
 
+    /* 관리자 화면: 아직 안 풀린(대기/부분체결) 주문 전체 - 왜 안 풀렸는지(lastUnmatchedReason) 확인용 */
+    @Query("SELECT o FROM Order o WHERE o.orderStatus IN :orderStatus ORDER BY o.lastAttemptAt DESC NULLS LAST, o.createdAt DESC")
+    List<Order> findByOrderStatusIn(@Param("orderStatus") List<OrderStatus> orderStatus);
+
     /* 이미 대기 중인 매도주문들의 미체결(예약) 수량 합 - 매도 주문 생성/체결 시 실보유수량과 비교해 초과매도를 막는 데 씀 */
     @Query("SELECT COALESCE(SUM(o.quantity - o.matchedQuantity), 0) FROM Order o " +
             "WHERE o.memberId = :memberId AND o.stockCode = :stockCode " +

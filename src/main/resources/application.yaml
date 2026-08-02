@@ -92,3 +92,22 @@ naver-openapi:
   clientId: ${NAVER_CLIENT_ID}
   clientSecret: ${NAVER_CLIENT_SECRET}
 
+anthropic:
+  apiKey: ${ANTHROPIC_API_KEY:}
+
+loki:
+  url: ${LOKI_URL:http://localhost:3100}
+
+admin:
+  member-id: ${ADMIN_MEMBER_ID:ADMIN} # 관리자 화면(/admin/**) 접근 허용할 memberId
+
+fds:
+  enabled: true # 오탐이 몰리면 재배포 없이 이 값만 false로 내려서 즉시 롤백 가능
+  order-frequency:
+    window-seconds: 60
+    threshold: 10
+  round-trip:
+    window-seconds: 60
+  price-outlier:
+    threshold-percent: 20
+

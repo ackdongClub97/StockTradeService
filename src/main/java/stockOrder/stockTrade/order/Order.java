@@ -38,4 +38,8 @@ public class Order {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    @Enumerated(EnumType.STRING)
+    private UnmatchReason lastUnmatchedReason; // 가장 최근 매칭 시도에서 (더 이상) 체결되지 않은 이유 - 관리자 화면용
+    private LocalDateTime lastAttemptAt;       // 가장 최근 매칭 시도 시각
+
 }

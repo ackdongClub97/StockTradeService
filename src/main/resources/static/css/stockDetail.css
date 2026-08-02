@@ -295,6 +295,48 @@
           border-radius: 10px;
         }
 
+        /* ── AI 뉴스 영향 분석 ── */
+        .news-analysis {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 16px;
+        }
+
+        .news-analysis-pending {
+          font-size: 12px;
+          color: var(--text-dim);
+          text-align: center;
+          padding: 12px 0;
+        }
+
+        .news-analysis-badge {
+          display: inline-block;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: .4px;
+          padding: 4px 10px;
+          border-radius: 999px;
+          margin-bottom: 10px;
+        }
+        .news-analysis-badge.up   { color: var(--red);      background: rgba(255,77,109,.12); }
+        .news-analysis-badge.down { color: var(--accent2);  background: rgba(0,255,178,.12); }
+        .news-analysis-badge.flat { color: var(--text-dim); background: rgba(77,112,144,.12); }
+
+        .news-analysis-reason {
+          font-size: 13px;
+          color: var(--text);
+          line-height: 1.7;
+        }
+
+        .news-analysis-sources {
+          margin-top: 10px;
+          padding-left: 18px;
+          font-size: 11px;
+          color: var(--text-dim);
+          line-height: 1.8;
+        }
+
         @media (max-width: 600px) {
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
           .stock-summary { flex-direction: column; align-items: flex-start; }
@@ -748,3 +790,42 @@
       }
 
       .seed-info span {
+        color: var(--accent);
+        font-weight: 900;
+        font-size: 17px;
+      }
+    }
+
+/* 주문완료 폭죽 효과 */
+.confetti-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1200;
+    overflow: hidden;
+}
+
+.confetti-piece {
+    position: absolute;
+    top: -10px;
+    width: 8px;
+    height: 14px;
+    opacity: 0.95;
+    animation-name: confetti-fall;
+    animation-timing-function: cubic-bezier(0.35, 0, 0.65, 1);
+    animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+    0% {
+        transform: translate(0, 0) rotate(0deg);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(var(--drift), 105vh) rotate(var(--rot));
+        opacity: 0.4;
+    }
+}

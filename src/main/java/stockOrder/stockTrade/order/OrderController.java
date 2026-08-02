@@ -10,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
 import stockOrder.stockTrade.kis.ResponseOutputDTO;
@@ -43,6 +44,7 @@ public class OrderController {
     private final KisWebSocketService kisWebSocketService;
     private final RealizedPnlService realizedPnlService;
     private final MemberRepository memberRepository;
+    private final FraudDetectionService fraudDetectionService;
 
     @PostMapping("/create")
     public ResponseEntity<Map<String, String>> submitOrder(@RequestBody Order order, @AuthenticationPrincipal CustomerDetails customerDetails) {
@@ -94,6 +96,7 @@ public class OrderController {
         log.info("order status {} / order Type {}", order.getOrderStatus(), order.getOrderType());
 
         orderRepository.save(order);
+        fraudDetectionService.checkOnSubmit(order);
         orderService.sendOrder(order);
 
         return ResponseEntity.ok(Map.of("orderId",orderId));

@@ -6,6 +6,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import stockOrder.stockTrade.admin.AdminAlert;
+import stockOrder.stockTrade.admin.AdminAlertService;
+import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.AskingPriceDTO;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
@@ -19,6 +22,7 @@ import stockOrder.stockTrade.order.PriceMode;
 import stockOrder.stockTrade.order.RealizedPnlService;
 import stockOrder.stockTrade.order.Trade;
 import stockOrder.stockTrade.order.TradeRepository;
+import stockOrder.stockTrade.order.UnmatchReason;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -35,12 +39,21 @@ public class MatchingService {
     private final KisService kisService;
     private final KisWebSocketService kisWebSocketService;
     private final RealizedPnlService realizedPnlService;
+    private final AdminAlertService adminAlertService;
+    private final FraudDetectionService fraudDetectionService;
     private final Sinks.Many<Order> orderResultSink = Sinks.many().multicast().onBackpressureBuffer();
+
+    /* 장마감 대기주문 일괄취소를 하루에 한 번만 실행하기 위한 플래그 - KisService.saveToday와 동일한 패턴 */
+    private boolean marketCloseCancelDone = false;
 
     @Scheduled(fixedRate = 30000, initialDelay = 5000)
     public void matching() {
         /* 장중 주문 시 30초 배치로 호가 기준 체결 시도 */
-        if(!kisService.isMarketOpen()) return;
+        if(!kisService.isMarketOpen()) {
+            cancelPendingOrdersAtMarketClose();
+            return;
+        }
+        marketCloseCancelDone = false;
 
         /* 대기 중인 종목 리스트 */
         List<String> pendingStockCodeBuyList = orderRepository.findPendingStockList(
@@ -52,16 +65,87 @@ public class MatchingService {
         log.info("[MatchingService] 대기 종목 {} 개 체결 시도",  pendingStockCodeBuyList.size());
 
         pendingStockCodeBuyList.forEach(pendingStockCode -> {
-            kisWebSocketService.subscribe(pendingStockCode);
+            try {
+                kisWebSocketService.subscribe(pendingStockCode);
 
-            AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(pendingStockCode);
-            if (book == null) {
-                log.info("[MatchingService] {} 호가 데이터 아직 없음 - 다음 주기에 재시도", pendingStockCode);
-                return;
+                AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(pendingStockCode);
+                if (book == null) {
+                    log.info("[MatchingService] {} 호가 데이터 아직 없음 - 다음 주기에 재시도", pendingStockCode);
+                    markUnmatched(pendingStockCode, UnmatchReason.NO_ORDERBOOK_DATA);
+                    return;
+                }
+
+                matchOrders(pendingStockCode, book);
+            } catch (Exception e) {
+                // 종목 하나 처리 중 예외(대부분 DB 커넥션 관련)가 나도 이번 배치의 나머지 종목은 계속 처리되게 격리
+                log.error("[MatchingService] {} 처리 중 예외 발생: {}", pendingStockCode, e.getMessage(), e);
+                markUnmatched(pendingStockCode, UnmatchReason.SYSTEM_ERROR);
+                adminAlertService.publish(new AdminAlert(null, pendingStockCode,
+                        "매칭 배치 중 예외: " + e.getMessage(), LocalDateTime.now()));
             }
-
-            matchOrders(pendingStockCode, book);
         });
+    }
+
+    /* 장이 마감되면(isMarketOpen()==false) 그 시점까지도 대기 중(PENDING/PARTIAL)인 주문을 전부 취소 처리.
+       matching()과 같은 30초 주기에서 호출되지만 marketCloseCancelDone 플래그로 하루 한 번만 실행됨 */
+    private void cancelPendingOrdersAtMarketClose() {
+        if (marketCloseCancelDone) return;
+
+        List<Order> pendingOrders = orderRepository.findByOrderStatusIn(
+                List.of(OrderStatus.PENDING, OrderStatus.PARTIAL)
+        );
+
+        if (!pendingOrders.isEmpty()) {
+            log.info("[MatchingService] 장마감 - 대기 주문 {}건 취소 처리 시작", pendingOrders.size());
+            pendingOrders.forEach(order -> {
+                try {
+                    cancelForMarketClose(order);
+                } catch (Exception e) {
+                    log.error("[MatchingService] 장마감 취소 처리 실패 orderId={} : {}", order.getOrderId(), e.getMessage(), e);
+                }
+            });
+        }
+
+        marketCloseCancelDone = true;
+    }
+
+    /* 매수 주문은 생성 시점에 전체 금액이 예약(차감)되어 있으므로, 미체결 잔량분만큼 환급 후 취소 처리 - OrderController.cancelOrder의 환급 로직과 동일 */
+    private void cancelForMarketClose(Order order) {
+        if (order.getOrderType() == OrderType.BUY) {
+            int remainingQty = order.getQuantity() - order.getMatchedQuantity();
+            int refund = order.getPrice() * remainingQty;
+
+            if (refund > 0) {
+                Member member = memberRepository.findByMemberId(order.getMemberId()).orElseThrow();
+                member.setSeed(member.getSeed() + refund);
+                memberRepository.save(member);
+            }
+        }
+
+        order.setOrderStatus(OrderStatus.CANCELLED);
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+
+        orderResultSink.tryEmitNext(order);
+        log.info("[MatchingService] 장마감 주문취소 {} / {}", order.getMemberId(), order.getOrderId());
+    }
+
+    /* 특정 종목의 대기(PENDING/PARTIAL) 주문 전체에 이번 회차 미체결 사유를 기록 - 호가 데이터 자체가 없었거나 배치 중 예외가 난 경우 */
+    private void markUnmatched(String stockCode, UnmatchReason reason) {
+        try {
+            List<OrderStatus> pendingStatuses = List.of(OrderStatus.PENDING, OrderStatus.PARTIAL);
+            List<Order> orders = orderRepository.findPendingByStockCodeAndType(stockCode, OrderType.BUY, pendingStatuses);
+            List<Order> sellOrders = orderRepository.findPendingByStockCodeAndType(stockCode, OrderType.SELL, pendingStatuses);
+
+            LocalDateTime now = LocalDateTime.now();
+            orders.forEach(o -> { o.setLastUnmatchedReason(reason); o.setLastAttemptAt(now); });
+            sellOrders.forEach(o -> { o.setLastUnmatchedReason(reason); o.setLastAttemptAt(now); });
+            orderRepository.saveAll(orders);
+            orderRepository.saveAll(sellOrders);
+        } catch (Exception e) {
+            // 사유 기록 자체도 DB 문제로 실패할 수 있음(SYSTEM_ERROR의 근본원인이 DB인 경우) - 이 경우엔 로그(Loki)가 유일한 기록임
+            log.warn("[MatchingService] {} 미체결 사유 기록 실패: {}", stockCode, e.getMessage());
+        }
     }
 
     /* 매수/매도 각각 같은 호가 스냅샷을 나눠 쓰므로, 같은 회차에서 여러 주문이 같은 물량을 중복으로 먹지 않도록
@@ -157,39 +241,59 @@ public class MatchingService {
         int remainQty = order.getQuantity() - order.getMatchedQuantity();
         if (remainQty <= 0) return;
 
-        FillPlan fill = computeFill(order, levels, remainQty, isBuy);
-        if (fill == null) {
-            log.info("[pending] {} 체결 가능 호가 없음 (지정가 {})", order.getStockName(), order.getPrice());
-            return;
+        try {
+            FillPlan fill = computeFill(order, levels, remainQty, isBuy);
+            order.setLastAttemptAt(LocalDateTime.now());
+
+            if (fill == null) {
+                log.info("[pending] {} {} 체결 가능 호가 없음 (지정가 {})", order.getOrderId(), order.getStockName(), order.getPrice());
+                order.setLastUnmatchedReason(UnmatchReason.NO_ELIGIBLE_PRICE);
+                orderRepository.save(order);
+                return;
+            }
+
+            // 매수는 주문 생성 시점에 order.price 기준으로 이미 전액 예약(차감)해뒀으므로
+            // 여기서 잔고 부족으로 체결이 막힐 일은 없다 (updateSeed에서 실제체결가와의 차액만 정산)
+
+            Trade trade = new Trade();
+            trade.setOrderId(order.getOrderId());
+            trade.setMemberId(order.getMemberId());
+            trade.setStockCode(order.getStockCode());
+            trade.setStockName(order.getStockName());
+            trade.setOrderType(order.getOrderType());
+            trade.setMatchedPrice(fill.price());
+            trade.setMatchedQuantity(fill.quantity());
+            trade.setMatchedAt(LocalDateTime.now());
+            tradeRepository.save(trade);
+            realizedPnlService.invalidate(order.getMemberId()); // 새 체결이 생겼으니 보유종목/매매차익 캐시 갱신 필요
+
+            order.setMatchedQuantity(order.getMatchedQuantity() + fill.quantity());
+            order.setMatchedPrice(fill.price());
+            order.setUpdatedAt(LocalDateTime.now());
+            order.setOrderStatus(order.getMatchedQuantity() >= order.getQuantity() ? OrderStatus.MATCHED : OrderStatus.PARTIAL);
+            order.setLastUnmatchedReason(null); // 이번 회차에 진전이 있었으니 이전 미체결 사유는 더 이상 유효하지 않음
+
+            orderRepository.save(order);
+            updateSeed(order, fill.price(), fill.quantity());
+            orderResultSink.tryEmitNext(order);
+            fraudDetectionService.checkOnExecute(order);
+
+            log.info("[체결] {} {} {} {}주중 누적 {}주(이번 회차 {}주) @ {}원 -> {}",
+                    order.getOrderId(), order.getMemberId(), order.getStockCode(), order.getQuantity(),
+                    order.getMatchedQuantity(), fill.quantity(), fill.price(), order.getOrderStatus());
+        } catch (Exception e) {
+            log.error("[매칭 오류] 주문 {} 처리 중 예외 발생: {}", order.getOrderId(), e.getMessage(), e);
+            adminAlertService.publish(new AdminAlert(order.getOrderId(), order.getStockCode(),
+                    "체결 시도 중 예외: " + e.getMessage(), LocalDateTime.now()));
+            try {
+                order.setLastUnmatchedReason(UnmatchReason.SYSTEM_ERROR);
+                order.setLastAttemptAt(LocalDateTime.now());
+                orderRepository.save(order);
+            } catch (Exception saveEx) {
+                // 근본원인이 DB 문제(예: 커넥션 풀 고갈)라면 이 저장도 실패할 수 있음 - 그 경우 위 log.error가 Loki에 남는 유일한 기록이 됨
+                log.warn("[매칭 오류] 주문 {} 사유 저장도 실패: {}", order.getOrderId(), saveEx.getMessage());
+            }
         }
-
-        // 매수는 주문 생성 시점에 order.price 기준으로 이미 전액 예약(차감)해뒀으므로
-        // 여기서 잔고 부족으로 체결이 막힐 일은 없다 (updateSeed에서 실제체결가와의 차액만 정산)
-
-        Trade trade = new Trade();
-        trade.setOrderId(order.getOrderId());
-        trade.setMemberId(order.getMemberId());
-        trade.setStockCode(order.getStockCode());
-        trade.setStockName(order.getStockName());
-        trade.setOrderType(order.getOrderType());
-        trade.setMatchedPrice(fill.price());
-        trade.setMatchedQuantity(fill.quantity());
-        trade.setMatchedAt(LocalDateTime.now());
-        tradeRepository.save(trade);
-        realizedPnlService.invalidate(order.getMemberId()); // 새 체결이 생겼으니 보유종목/매매차익 캐시 갱신 필요
-
-        order.setMatchedQuantity(order.getMatchedQuantity() + fill.quantity());
-        order.setMatchedPrice(fill.price());
-        order.setUpdatedAt(LocalDateTime.now());
-        order.setOrderStatus(order.getMatchedQuantity() >= order.getQuantity() ? OrderStatus.MATCHED : OrderStatus.PARTIAL);
-
-        orderRepository.save(order);
-        updateSeed(order, fill.price(), fill.quantity());
-        orderResultSink.tryEmitNext(order);
-
-        log.info("[체결] {} {} {}주중 누적 {}주(이번 회차 {}주) @ {}원 -> {}",
-                order.getMemberId(), order.getStockCode(), order.getQuantity(),
-                order.getMatchedQuantity(), fill.quantity(), fill.price(), order.getOrderStatus());
     }
 
     private void updateSeed(Order order, int fillPrice, int fillQty) {
@@ -232,7 +336,10 @@ public class MatchingService {
 
         AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(orderData.getStockCode());
         if (book == null) {
-            log.info("[tryMatch] {} 호가 데이터 아직 없음 - 다음 배치에서 재시도", orderData.getStockCode());
+            log.info("[tryMatch] {} {} 호가 데이터 아직 없음 - 다음 배치에서 재시도", orderData.getOrderId(), orderData.getStockCode());
+            orderData.setLastUnmatchedReason(UnmatchReason.NO_ORDERBOOK_DATA);
+            orderData.setLastAttemptAt(LocalDateTime.now());
+            orderRepository.save(orderData);
             return;
         }
 

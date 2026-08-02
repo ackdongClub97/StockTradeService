@@ -8,6 +8,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import stockOrder.stockTrade.admin.AdminAlertService;
+import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.AskingPriceDTO;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
@@ -48,6 +50,8 @@ class MatchingServiceTest {
     @Mock private KisService kisService;
     @Mock private KisWebSocketService kisWebSocketService;
     @Mock private RealizedPnlService realizedPnlService;
+    @Mock private AdminAlertService adminAlertService;
+    @Mock private FraudDetectionService fraudDetectionService;
 
     @InjectMocks
     private MatchingService matchingService;

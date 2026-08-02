@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>관리자 - 미체결 주문</title>
+    <link rel="stylesheet" href="/css/adminOrders.css"/>
+</head>
+<body>
+
+<div class="page">
+    <div class="page-inner">
+        <header class="header">
+            <div th:replace="~{fragments/header :: header}"></div>
+        </header>
+    </div>
+
+    <div class="page-content">
+        <div class="page-title">ADMIN</div>
+        <div class="page-heading">미체결 주문 모니터링</div>
+
+        <div class="stat-row">
+            <div class="stat-card">
+                <div class="stat-label">현재 로그인 세션 수</div>
+                <div class="stat-value" id="sessionCount" th:text="${sessionCount}">0</div>
+            </div>
+        </div>
+
+        <div id="alertBanner" class="alert-banner" style="display:none;"></div>
+
+        <table class="order-table">
+            <thead>
+            <tr>
+                <th>주문ID</th>
+                <th>회원</th>
+                <th>종목</th>
+                <th>구분</th>
+                <th>수량</th>
+                <th>체결</th>
+                <th>가격</th>
+                <th>상태</th>
+                <th>미체결 사유</th>
+                <th>마지막 시도</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="o : ${orders}" th:attr="data-order-id=${o.orderId}">
+                <td th:text="${o.orderId}"></td>
+                <td th:text="${o.memberId}"></td>
+                <td th:text="${o.stockName} + ' (' + ${o.stockCode} + ')'"></td>
+                <td th:text="${o.orderType}"></td>
+                <td th:text="${o.quantity}"></td>
+                <td th:text="${o.matchedQuantity}"></td>
+                <td th:text="${o.price}"></td>
+                <td th:text="${o.orderStatus}"></td>
+                <td>
+                    <span th:if="${o.lastUnmatchedReason == null}" class="reason reason-none">-</span>
+                    <span th:if="${o.lastUnmatchedReason != null}"
+                          th:text="${o.lastUnmatchedReason}"
+                          th:class="'reason reason-' + ${o.lastUnmatchedReason}"></span>
+                </td>
+                <td th:text="${o.lastAttemptAt != null ? #temporals.format(o.lastAttemptAt, 'yyyy-MM-dd HH:mm:ss') : '-'}"></td>
+                <td>
+                    <button class="log-btn"
+                            th:attr="data-order-id=${o.orderId},data-around=${o.lastAttemptAt != null ? #temporals.format(o.lastAttemptAt, 'yyyy-MM-dd''T''HH:mm:ss') : (o.createdAt != null ? #temporals.format(o.createdAt, 'yyyy-MM-dd''T''HH:mm:ss') : '')}">
+                        로그 보기
+                    </button>
+                </td>
+            </tr>
+            <tr th:if="${#lists.isEmpty(orders)}">
+                <td colspan="11" class="empty-row">현재 미체결 주문이 없습니다.</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <div id="logModal" class="log-modal" style="display:none;">
+            <div class="log-modal-content">
+                <div class="log-modal-top">
+                    <h3 id="logModalTitle">로그</h3>
+                    <span class="close-btn" onclick="closeLogModal()">✕</span>
+                </div>
+                <div class="log-query-row">
+                    <input id="logQueryInput" type="text"/>
+                    <button onclick="fetchLogs()">조회</button>
+                </div>
+                <pre id="logResult" class="log-result">조회 버튼을 눌러주세요.</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    let aroundIso = null;
+
+    document.querySelectorAll('.log-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const orderId = btn.getAttribute('data-order-id');
+            aroundIso = btn.getAttribute('data-around');
+            document.getElementById('logModalTitle').textContent = '로그 - ' + orderId;
+            document.getElementById('logQueryInput').value = '{app="stocktrade"} |= "' + orderId + '"';
+            document.getElementById('logResult').textContent = '조회 버튼을 눌러주세요.';
+            document.getElementById('logModal').style.display = 'block';
+        });
+    });
+
+    function closeLogModal() {
+        document.getElementById('logModal').style.display = 'none';
+    }
+
+    function fetchLogs() {
+        const query = document.getElementById('logQueryInput').value;
+        const resultEl = document.getElementById('logResult');
+        resultEl.textContent = '조회 중...';
+
+        // 마지막 시도 시각 기준 앞뒤 10분 - 로컬 시간 문자열을 그대로 epoch 초로 변환
+        let fromEpochSec = null, toEpochSec = null;
+        if (aroundIso) {
+            const aroundMs = new Date(aroundIso).getTime();
+            fromEpochSec = Math.floor((aroundMs - 10 * 60 * 1000) / 1000);
+            toEpochSec = Math.floor((aroundMs + 10 * 60 * 1000) / 1000);
+        }
+
+        const params = new URLSearchParams({query});
+        if (fromEpochSec) params.set('fromEpochSec', fromEpochSec);
+        if (toEpochSec) params.set('toEpochSec', toEpochSec);
+
+        fetch('/api/admin/logs?' + params.toString(), {credentials: 'include'})
+            .then(r => r.json())
+            .then(lines => {
+                if (!lines || lines.length === 0) {
+                    resultEl.textContent = '해당 조건의 로그가 없습니다. (Loki가 안 떠있거나 로그 보존기간을 벗어났을 수 있어요)';
+                    return;
+                }
+                resultEl.textContent = lines.map(l => `[${l.timestamp}] ${l.line}`).join('\n');
+            })
+            .catch(() => {
+                resultEl.textContent = '로그 조회 실패 (Loki 연결을 확인해주세요)';
+            });
+    }
+
+    // SYSTEM_ERROR 발생 시 실시간 배너
+    const es = new EventSource('/api/admin/alerts/stream');
+    es.addEventListener('admin-alert', (e) => {
+        const data = JSON.parse(e.data);
+        const banner = document.getElementById('alertBanner');
+        banner.style.display = 'block';
+        banner.textContent = `⚠ [${data.occurredAt}] ${data.stockCode} ${data.orderId ? '(' + data.orderId + ')' : ''} - ${data.message}`;
+    });
+
+    // 로그인 세션 수 10초마다 갱신
+    setInterval(() => {
+        fetch('/api/admin/session-count', {credentials: 'include'})
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('sessionCount').textContent = data.count;
+            })
+            .catch(() => {});
+    }, 10000);
+</script>
+
+</body>
+</html>

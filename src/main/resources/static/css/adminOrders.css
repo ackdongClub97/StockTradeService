@@ -1,0 +1,210 @@
+:root {
+  --bg:       #04080f;
+  --surface:  #0b1220;
+  --border:   #152033;
+  --accent:   #00c2ff;
+  --accent2:  #00ffb2;
+  --red:      #ff4d6d;
+  --muted:    #3a5068;
+  --text:     #cde4f5;
+  --text-dim: #4d7090;
+  --gold:     #ffd166;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Noto Sans KR', 'JetBrains Mono', monospace, sans-serif;
+  min-height: 100vh;
+}
+
+.page { display: flex; flex-direction: column; min-height: 100vh; }
+
+.page-inner {
+  max-width: 1100px; width: 100%;
+  margin: 0 auto; padding: 0 20px;
+}
+
+.header { max-width: 1100px; margin: 0 auto; width: 100%; }
+
+.page-content {
+  max-width: 1100px; width: 100%;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+.page-title {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.page-heading {
+  font-size: 22px; font-weight: 700;
+  color: #e8f4ff; margin-bottom: 24px;
+}
+
+.alert-banner {
+  background: rgba(255, 77, 109, 0.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.stat-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 18px;
+  min-width: 160px;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: .5px;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.order-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.order-table th, .order-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.order-table th {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.order-table tbody tr:hover {
+  background: rgba(0, 194, 255, 0.05);
+}
+
+.empty-row {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 30px;
+}
+
+.reason { font-weight: 700; }
+.reason-none { color: var(--text-dim); font-weight: 400; }
+.reason-NO_ELIGIBLE_PRICE { color: var(--gold); }
+.reason-NO_ORDERBOOK_DATA { color: var(--accent); }
+.reason-SYSTEM_ERROR { color: var(--red); }
+
+.log-btn {
+  background: var(--border);
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.log-btn:hover { background: var(--muted); }
+
+.log-modal {
+  position: fixed;
+  z-index: 999;
+  left: 0; top: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+}
+
+.log-modal-content {
+  width: min(700px, calc(100% - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  margin: 6% auto;
+  padding: 20px;
+  border-radius: 16px;
+}
+
+.log-modal-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.log-modal-top .close-btn { cursor: pointer; color: var(--text-dim); }
+
+.log-query-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.log-query-row input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.log-query-row button {
+  background: var(--accent);
+  color: #04080f;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.log-result {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 50vh;
+  overflow-y: auto;
+}

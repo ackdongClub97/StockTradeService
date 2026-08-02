@@ -138,6 +138,82 @@
             </div>
         </div>
 
+        <!-- 주문 확인 모달 -->
+        <div id="confirmModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-top">
+                    <h2 id="confirmTitle">주문을 확정하시겠습니까?</h2>
+                    <span class="close-btn" onclick="closeConfirmModal()">✕</span>
+                </div>
+
+                <div class="readonly-info-group">
+                    <div class="readonly-info-row">
+                        <span>종목</span>
+                        <span id="cfName">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>구분</span>
+                        <span id="cfType">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>수량</span>
+                        <span id="cfQuantity">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>단가</span>
+                        <span id="cfPrice">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>총액</span>
+                        <span id="cfTotal">-</span>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px;">
+                    <button class="submit-btn" style="background:#3a5068; flex:1;" onclick="closeConfirmModal()">취소</button>
+                    <button class="submit-btn" style="flex:1;" id="confirmOrderBtn">확인</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 주문완료 모달 -->
+        <div id="orderCompleteModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-top">
+                    <h2>주문완료 되었습니다</h2>
+                    <span class="close-btn" onclick="closeOrderCompleteModal()">✕</span>
+                </div>
+
+                <div class="readonly-info-group">
+                    <div class="readonly-info-row">
+                        <span>종목</span>
+                        <span id="ocName">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>구분</span>
+                        <span id="ocType">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>수량</span>
+                        <span id="ocQuantity">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>단가</span>
+                        <span id="ocPrice">-</span>
+                    </div>
+                    <div class="readonly-info-row">
+                        <span>총액</span>
+                        <span id="ocTotal">-</span>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px; margin-top:10px;">
+                    <button class="submit-btn" style="background:#3a5068; flex:1;" onclick="cancelJustPlacedOrder()">취소</button>
+                    <button class="submit-btn" style="flex:1;" onclick="closeOrderCompleteModal()">확인</button>
+                </div>
+            </div>
+        </div>
+
         <!-- 상세 지표 -->
         <div class="stats-grid">
             <div class="stat-card">
@@ -157,6 +233,16 @@
         <!-- 실시간 호가 -->
         <div class="section-title">호가</div>
         <div class="orderbook" id="orderbook"></div>
+
+        <!-- AI 뉴스 영향 분석 -->
+        <div class="section-title">AI 뉴스 영향 분석</div>
+        <div class="news-analysis" id="newsAnalysis">
+            <div class="news-analysis-loading">
+                <div class="skeleton" style="width:50%;margin-bottom:8px"></div>
+                <div class="skeleton" style="width:100%;height:10px;margin-bottom:6px"></div>
+                <div class="skeleton" style="width:85%;height:10px"></div>
+            </div>
+        </div>
 
         <!-- 관련 뉴스 -->
         <div class="section-title">관련 뉴스</div>
@@ -372,6 +458,27 @@
           '<div class="news-error">뉴스를 불러오지 못했습니다.</div>';
       });
 
+    <!--              AI 뉴스 영향 분석              -->
+    fetch(`/api/news/${code}/analysis?name=${encodeURIComponent(name)}`)
+      .then(r => r.json())
+      .then(data => {
+        const box = document.getElementById('newsAnalysis');
+        if (!data || data.status !== 'COMPLETED') {
+          box.innerHTML = '<div class="news-analysis-pending">분석 중입니다...</div>';
+          return;
+        }
+        const dirKr = data.direction === 'UP' ? '상승' : data.direction === 'DOWN' ? '하락' : '보합';
+        const dirClass = data.direction === 'UP' ? 'up' : data.direction === 'DOWN' ? 'down' : 'flat';
+        const sources = (data.articleTitles || []).map(t => `<li>${stripHtml(t)}</li>`).join('');
+        box.innerHTML = `
+          <div class="news-analysis-badge ${dirClass}">오늘 ${dirKr} 예상 이유</div>
+          <div class="news-analysis-reason">${stripHtml(data.reason || '')}</div>
+          ${sources ? `<ul class="news-analysis-sources">${sources}</ul>` : ''}
+        `;
+      }).catch(() => {
+        document.getElementById('newsAnalysis').innerHTML =
+          '<div class="news-analysis-pending">분석 중입니다...</div>';
+      });
 
 
     <!--              모달창              -->
@@ -555,40 +662,129 @@
         }
 
         const action = orderType == 'buy' ? '매수' : '매도';
-        const confirmed = confirm(
-            `${action} 주문을 확정하시겠습니까?\n\n` +
-            `종목: ${name}\n` +
-            `수량: ${quantity.value}주\n` +
-            `단가: ${submitPrice.toLocaleString()}원\n` +
-            `총액: ${submitTotal.toLocaleString()}원`
-        );
 
-        if (!confirmed) return;
-
-        fetch('/api/order/create', {
-            method: 'POST',
-            credentials: 'include',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                stockCode: code,
-                stockName: name,
-                orderType: orderType == 'buy' ? 'BUY' : 'SELL',
-                quantity: quantity.value,
-                price : submitPrice, /* 단가 */
-                priceMode: (orderType == 'buy' ? buyPriceMode : priceMode).toUpperCase()
-            })
-        }).then(r => r.json())
-        .then(data => {
-            if (!data.orderId) {
-                alert(data.message || '주문이 거부되었습니다.');
-                return;
-            }
-            alert('주문완료 : 주문번호 :' + data.orderId);
-            closeModal();
-        }).catch(() => {
-            alert('주문 처리 중 오류가 발생했습니다.');
+        openConfirmModal(action, quantity.value, submitPrice, submitTotal, () => {
+            fetch('/api/order/create', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    stockCode: code,
+                    stockName: name,
+                    orderType: orderType == 'buy' ? 'BUY' : 'SELL',
+                    quantity: quantity.value,
+                    price : submitPrice, /* 단가 */
+                    priceMode: (orderType == 'buy' ? buyPriceMode : priceMode).toUpperCase()
+                })
+            }).then(r => r.json())
+            .then(data => {
+                if (!data.orderId) {
+                    alert(data.message || '주문이 거부되었습니다.');
+                    return;
+                }
+                const orderedQty = parseInt(quantity.value) || 0;
+                closeModal();
+                openOrderCompleteModal(data.orderId, name, action, orderedQty, submitPrice, submitTotal);
+            }).catch(() => {
+                alert('주문 처리 중 오류가 발생했습니다.');
+            });
         });
     });
+
+    <!--              주문 확인 모달              -->
+    function openConfirmModal(action, qty, price, total, onConfirm) {
+        document.getElementById('cfName').textContent = name;
+        document.getElementById('cfType').textContent = action;
+        document.getElementById('cfQuantity').textContent = qty + '주';
+        document.getElementById('cfPrice').textContent = price.toLocaleString() + '원';
+        document.getElementById('cfTotal').textContent = total.toLocaleString() + '원';
+        document.getElementById('confirmModal').style.display = 'block';
+        document.getElementById('confirmOrderBtn').onclick = () => {
+            closeConfirmModal();
+            onConfirm();
+        };
+    }
+
+    function closeConfirmModal() {
+        document.getElementById('confirmModal').style.display = 'none';
+    }
+
+    <!--              주문완료 모달              -->
+    let ocOrderId = null;
+
+    function openOrderCompleteModal(orderId, stockName, action, qty, price, total) {
+        ocOrderId = orderId;
+        document.getElementById('ocName').textContent = stockName;
+        document.getElementById('ocType').textContent = action;
+        document.getElementById('ocQuantity').textContent = qty + '주';
+        document.getElementById('ocPrice').textContent = price.toLocaleString() + '원';
+        document.getElementById('ocTotal').textContent = total.toLocaleString() + '원';
+        document.getElementById('orderCompleteModal').style.display = 'block';
+        launchConfetti();
+    }
+
+    function closeOrderCompleteModal() {
+        document.getElementById('orderCompleteModal').style.display = 'none';
+        ocOrderId = null;
+    }
+
+    <!--              주문완료 폭죽 효과              -->
+    function launchConfetti() {
+        const colors = ['#ff3b5c', '#ff6b81', '#2979ff', '#5393ff', '#ffd93b', '#4cd964', '#c77dff'];
+        const container = document.createElement('div');
+        container.className = 'confetti-container';
+        document.body.appendChild(container);
+
+        const pieceCount = 120;
+        for (let i = 0; i < pieceCount; i++) {
+            const piece = document.createElement('div');
+            piece.className = 'confetti-piece';
+            piece.style.left = Math.random() * 100 + 'vw';
+            piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+            piece.style.animationDuration = (2 + Math.random() * 1.5) + 's';
+            piece.style.animationDelay = (Math.random() * 0.4) + 's';
+            piece.style.setProperty('--rot', (Math.random() * 720 - 360) + 'deg');
+            piece.style.setProperty('--drift', (Math.random() * 160 - 80) + 'px');
+            container.appendChild(piece);
+        }
+
+        setTimeout(() => container.remove(), 4000);
+    }
+
+    function cancelJustPlacedOrder() {
+        if (!ocOrderId) return;
+        const orderId = ocOrderId;
+
+        fetch('/api/order/history', {credentials: 'include'})
+            .then(r => r.json())
+            .then(orders => {
+                const order = orders.find(o => o.orderId === orderId);
+
+                if (!order || (order.orderStatus !== 'PENDING' && order.orderStatus !== 'PARTIAL')) {
+                    alert('이미 처리되어 취소할 수 없는 주문입니다.');
+                    return;
+                }
+
+                const remaining = order.quantity - order.matchedQuantity;
+                const confirmMsg = order.matchedQuantity > 0
+                    ? `일부 체결되어 ${remaining}주만 취소 가능합니다.\n취소하시겠습니까?`
+                    : '주문을 취소하시겠습니까?';
+
+                if (!confirm(confirmMsg)) return;
+
+                fetch(`/api/order/${orderId}/cancel`, {method: 'POST', credentials: 'include'})
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res.message !== 'SUCCESS') {
+                            alert(res.message || '취소에 실패했습니다.');
+                            return;
+                        }
+                        closeOrderCompleteModal();
+                    })
+                    .catch(() => alert('취소 처리 중 오류가 발생했습니다.'));
+            })
+            .catch(() => alert('주문 상태 조회 중 오류가 발생했습니다.'));
+    }
 
     connectSSE();
     connectAskingPriceSSE();
