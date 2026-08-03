@@ -24,13 +24,16 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/* KIS 실시간시세 웹소켓 - 체결가(H0STCNT0)/호가(H0STASP0) 종목 단위 구독.
+/* KIS 실시간시세 웹소켓 - 호가(H0STASP0) 종목 단위 구독.
+   체결가(H0STCNT0)는 별도로 구독하지 않는다 - 매칭엔진은 원래도 호가만 쓰고, 화면에 필요한
+   현재가/등락률/전일대비도 호가 최우선단계 + 전일종가로 계산 가능해서 종목당 실시간 등록 건수를
+   2건에서 1건으로 줄였다(KIS 세션당 등록 한도를 아끼기 위함). 다만 누적거래량만은 호가 프레임에
+   없는 값이라 REST로 별도 갱신한다(refreshDailyStats 참고).
    랭킹(volume-rank)은 KIS 웹소켓에 대응 API가 없어 REST 폴링(KisService.refreshRank)을 그대로 유지한다. */
 @Service
 @Slf4j
 public class KisWebSocketService extends TextWebSocketHandler {
 
-    private static final String TR_CCNL = "H0STCNT0";
     private static final String TR_ASKING = "H0STASP0";
     private static final int MAX_SUBSCRIPTIONS = 40;
 
@@ -48,6 +51,10 @@ public class KisWebSocketService extends TextWebSocketHandler {
     private final Map<String, Sinks.Many<AskingPriceDTO>> askingPriceSink = new ConcurrentHashMap<>();
     // 상세페이지를 아무도 안 보고 있어도(=SSE sink 없어도) 매칭엔진이 최신 호가를 읽을 수 있도록 항상 갱신되는 캐시
     private final Map<String, AskingPriceDTO> cachedAskingPrice = new ConcurrentHashMap<>();
+    // 종목별 전일종가/최근 누적거래량 - 호가 틱마다 현재가·등락률·전일대비를 계산하는 데 씀(REST 웜업/refreshDailyStats에서 채움)
+    private final Map<String, DailyStats> dailyStats = new ConcurrentHashMap<>();
+
+    private record DailyStats(int prevClose, String acmlVol) {}
 
     public KisWebSocketService(TokenService tokenService, KisService kisService, ObjectMapper objectMapper) {
         this.tokenService = tokenService;
@@ -78,7 +85,7 @@ public class KisWebSocketService extends TextWebSocketHandler {
         }
     }
 
-    @Scheduled(fixedDelay = 30000, initialDelay = 30000)
+    @Scheduled(fixedDelay = 10000, initialDelay = 10000)
     public void healthCheck() {
         if (session == null || !session.isOpen()) {
             log.warn("[KisWS] 세션 끊김 감지 - 재연결 시도");
@@ -131,18 +138,100 @@ public class KisWebSocketService extends TextWebSocketHandler {
         sendSubscribe(code);
 
         kisService.getStockDetail(code).subscribe(
-                dto -> kisService.pushStockDetail(code, dto),
+                dto -> {
+                    kisService.pushStockDetail(code, dto);
+                    cacheDailyStats(code, dto);
+                },
                 err -> log.warn("[KisWS] {} 웜업 조회 실패: {}", code, err.getMessage())
         );
+    }
+
+    /* 누적거래량은 호가 프레임에 없는 값이라 REST로만 얻을 수 있음 - 구독 종목에 한해 30초마다 갱신.
+       같은 김에 전일종가도 다시 확인해서(자정 넘어 날짜가 바뀌는 경우 대비) dailyStats를 최신 상태로 유지한다. */
+    @Scheduled(fixedDelay = 30000, initialDelay = 30000)
+    public void refreshDailyStats() {
+        subscribedCodes.forEach(code ->
+                kisService.getStockDetail(code).subscribe(
+                        dto -> {
+                            cacheDailyStats(code, dto);
+                            AskingPriceDTO book = cachedAskingPrice.get(code);
+                            if (book != null) pushDerivedDetail(code, book);
+                        },
+                        err -> log.warn("[KisWS] {} 누적거래량 갱신 실패: {}", code, err.getMessage())
+                )
+        );
+    }
+
+    private void cacheDailyStats(String code, ResponseOutputDTO dto) {
+        try {
+            int prpr = Integer.parseInt(dto.getStckPrpr().trim());
+            int vrss = Integer.parseInt(dto.getPrdyVrss().trim());
+            dailyStats.put(code, new DailyStats(prpr - vrss, dto.getAcmlVol()));
+        } catch (Exception e) {
+            log.warn("[KisWS] {} 전일종가 계산 실패: {}", code, e.getMessage());
+        }
+    }
+
+    /* 체결가(H0STCNT0) 구독 없이 현재가/등락률/전일대비를 재현: 호가 최우선단계(매도1·매수1) 중간값을
+       현재가로 근사하고, dailyStats에 캐시해둔 전일종가와 비교해서 계산한다. 누적거래량은 REST 웜업/
+       refreshDailyStats에서 마지막으로 받아둔 값을 그대로 씀(다음 갱신 전까지는 다소 지연될 수 있음). */
+    private void pushDerivedDetail(String code, AskingPriceDTO book) {
+        DailyStats stats = dailyStats.get(code);
+        if (stats == null) return; // 아직 REST 웜업 전 - 다음 틱/갱신에서 재시도
+
+        Integer current = deriveCurrentPrice(book);
+        if (current == null) return;
+
+        int vrss = current - stats.prevClose();
+        double ctrt = stats.prevClose() == 0 ? 0 : vrss * 100.0 / stats.prevClose();
+
+        ResponseOutputDTO dto = new ResponseOutputDTO();
+        dto.setMkscShrnIscd(code);
+        dto.setStckPrpr(String.valueOf(current));
+        dto.setPrdyVrss(String.valueOf(vrss));
+        dto.setPrdyCtrt(String.format(java.util.Locale.US, "%.2f", ctrt));
+        dto.setAcmlVol(stats.acmlVol());
+
+        kisService.pushStockDetail(code, dto);
+    }
+
+    private static Integer deriveCurrentPrice(AskingPriceDTO book) {
+        int ask = parseIntSafe(book.getAskPrices()[0]);
+        int bid = parseIntSafe(book.getBidPrices()[0]);
+        if (ask > 0 && bid > 0) return Math.round((ask + bid) / 2f);
+        if (ask > 0) return ask;
+        if (bid > 0) return bid;
+        return null;
+    }
+
+    private static int parseIntSafe(String s) {
+        try {
+            return (s == null || s.isBlank()) ? 0 : Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     public Flux<AskingPriceDTO> getAskingPriceStream(String code) {
         Sinks.Many<AskingPriceDTO> sink = askingPriceSink.computeIfAbsent(code, k -> Sinks.many().replay().latest());
 
         return sink.asFlux()
-                .doOnSubscribe(s -> subscribe(code))
-                .doOnCancel(() -> askingPriceSink.remove(code))
-                .doOnTerminate(() -> askingPriceSink.remove(code));
+                .doOnSubscribe(s -> {
+                    subscribe(code);
+
+                    // subscribe()는 이미 구독 중인 종목이면 아무것도 안 하므로, 새로고침 등으로 재접속한
+                    // 시점에 캐시된 마지막 호가가 있으면 바로 하나 밀어준다 (없으면 다음 틱까지 빈 화면으로 남는다).
+                    AskingPriceDTO cached = cachedAskingPrice.get(code);
+                    if (cached != null) {
+                        sink.tryEmitNext(cached);
+                    }
+                })
+                // sink를 map에서 지우지 않는다 - replay().latest()가 마지막 값을 들고 있어야
+                // 재접속(새로고침) 시 새 틱 없이도 마지막 값을 바로 다시 보여줄 수 있다.
+                .onErrorResume(e -> {           // ← 에러 시에만 새 Sink로 교체
+                    askingPriceSink.remove(code);
+                    return getAskingPriceStream(code);
+                });
     }
 
     private void resubscribeAll() {
@@ -150,7 +239,6 @@ public class KisWebSocketService extends TextWebSocketHandler {
     }
 
     private void sendSubscribe(String code) {
-        send(TR_CCNL, code);
         send(TR_ASKING, code);
     }
 
@@ -217,26 +305,9 @@ public class KisWebSocketService extends TextWebSocketHandler {
         String trId = parts[1];
         String[] fields = parts[3].split("\\^");
 
-        if (TR_CCNL.equals(trId)) {
-            handleCcnl(fields);
-        } else if (TR_ASKING.equals(trId)) {
+        if (TR_ASKING.equals(trId)) {
             handleAskingPrice(fields);
         }
-    }
-
-    // H0STCNT0 필드 순서(KIS 공식 예제 기준): 0 MKSC_SHRN_ISCD, 2 STCK_PRPR, 4 PRDY_VRSS, 5 PRDY_CTRT, 13 ACML_VOL
-    private void handleCcnl(String[] f) {
-        if (f.length <= 13) return;
-
-        String code = f[0];
-        ResponseOutputDTO dto = new ResponseOutputDTO();
-        dto.setMkscShrnIscd(code);
-        dto.setStckPrpr(f[2]);
-        dto.setPrdyVrss(f[4]);
-        dto.setPrdyCtrt(f[5]);
-        dto.setAcmlVol(f[13]);
-
-        kisService.pushStockDetail(code, dto);
     }
 
     // H0STASP0 필드 순서: 0 MKSC_SHRN_ISCD, 3~12 ASKP1~10, 13~22 BIDP1~10,
@@ -271,6 +342,8 @@ public class KisWebSocketService extends TextWebSocketHandler {
 
         Sinks.Many<AskingPriceDTO> sink = askingPriceSink.get(code);
         if (sink != null) sink.tryEmitNext(dto);
+
+        pushDerivedDetail(code, dto);
     }
 
     /* 매칭엔진이 체결가능수량/가격을 판단할 때 쓰는 최신 호가 스냅샷 - 없으면 null(아직 첫 프레임 전) */

@@ -134,8 +134,8 @@ public class MatchingService {
     private void markUnmatched(String stockCode, UnmatchReason reason) {
         try {
             List<OrderStatus> pendingStatuses = List.of(OrderStatus.PENDING, OrderStatus.PARTIAL);
-            List<Order> orders = orderRepository.findPendingByStockCodeAndType(stockCode, OrderType.BUY, pendingStatuses);
-            List<Order> sellOrders = orderRepository.findPendingByStockCodeAndType(stockCode, OrderType.SELL, pendingStatuses);
+            List<Order> orders = orderRepository.findPendingBuyOrders(stockCode, pendingStatuses);
+            List<Order> sellOrders = orderRepository.findPendingSellOrders(stockCode, pendingStatuses);
 
             LocalDateTime now = LocalDateTime.now();
             orders.forEach(o -> { o.setLastUnmatchedReason(reason); o.setLastAttemptAt(now); });
@@ -149,15 +149,18 @@ public class MatchingService {
     }
 
     /* 매수/매도 각각 같은 호가 스냅샷을 나눠 쓰므로, 같은 회차에서 여러 주문이 같은 물량을 중복으로 먹지 않도록
-       레벨별 잔량을 로컬에서 차감해가며(BookLevels) 시간 우선(createdAt ASC) 순서로 소진시킨다. */
+       레벨별 잔량을 로컬에서 차감해가며(BookLevels) 가격 우선 → 시간 우선(price priority → time priority) 순서로 소진시킨다.
+       (매수는 지정가가 높을수록, 매도는 지정가가 낮을수록 더 공격적인 주문이라 먼저 체결 기회를 준다 - findPendingBuyOrders/findPendingSellOrders 정렬 참고) */
     private void matchOrders(String pendingStockCode, AskingPriceDTO book) {
         BookLevels askLevels = new BookLevels(book.getAskPrices(), book.getAskVolumes());
         BookLevels bidLevels = new BookLevels(book.getBidPrices(), book.getBidVolumes());
 
-        List<Order> buyOrders = orderRepository.findPendingByStockCodeAndType(pendingStockCode, OrderType.BUY, List.of(OrderStatus.PENDING, OrderStatus.PARTIAL));
+        List<OrderStatus> pendingStatuses = List.of(OrderStatus.PENDING, OrderStatus.PARTIAL);
+
+        List<Order> buyOrders = orderRepository.findPendingBuyOrders(pendingStockCode, pendingStatuses);
         buyOrders.forEach(order -> execute(order, askLevels, true));
 
-        List<Order> sellOrders = orderRepository.findPendingByStockCodeAndType(pendingStockCode, OrderType.SELL, List.of(OrderStatus.PENDING, OrderStatus.PARTIAL));
+        List<Order> sellOrders = orderRepository.findPendingSellOrders(pendingStockCode, pendingStatuses);
         sellOrders.forEach(order -> execute(order, bidLevels, false));
     }
 
@@ -281,6 +284,8 @@ public class MatchingService {
             log.info("[체결] {} {} {} {}주중 누적 {}주(이번 회차 {}주) @ {}원 -> {}",
                     order.getOrderId(), order.getMemberId(), order.getStockCode(), order.getQuantity(),
                     order.getMatchedQuantity(), fill.quantity(), fill.price(), order.getOrderStatus());
+
+            logPriceImprovement(order, isBuy, fill.price());
         } catch (Exception e) {
             log.error("[매칭 오류] 주문 {} 처리 중 예외 발생: {}", order.getOrderId(), e.getMessage(), e);
             adminAlertService.publish(new AdminAlert(order.getOrderId(), order.getStockCode(),
@@ -294,6 +299,18 @@ public class MatchingService {
                 log.warn("[매칭 오류] 주문 {} 사유 저장도 실패: {}", order.getOrderId(), saveEx.getMessage());
             }
         }
+    }
+
+    /* 지정가 매수 자동 가격개선(5% 밴드)이 실제로 지정가보다 얼마나 유리하게 체결되는지 통계 낼 수 있도록 체결 시점에 기록만 해둔다.
+       별도 DB 컬럼/통계 시스템 없이, Order.price(지정가)와 Trade.matchedPrice(실제 체결가)가 이미 DB에 남아있으므로
+       이 로그는 Loki/Grafana에서 실시간으로 훑어볼 수 있는 보조 채널이고, 정확한 집계는 두 테이블을 JOIN해서 언제든 다시 계산 가능하다. */
+    private void logPriceImprovement(Order order, boolean isBuy, int fillPrice) {
+        if (!isBuy || order.getPriceMode() != PriceMode.LIMIT || order.getPrice() <= 0) return;
+
+        double improvementPercent = (order.getPrice() - fillPrice) * 100.0 / order.getPrice();
+        log.info("[가격개선] {} {} 지정가 {}원 체결가 {}원 개선율 {}%",
+                order.getOrderId(), order.getStockCode(), order.getPrice(), fillPrice,
+                String.format("%.2f", improvementPercent));
     }
 
     private void updateSeed(Order order, int fillPrice, int fillQty) {

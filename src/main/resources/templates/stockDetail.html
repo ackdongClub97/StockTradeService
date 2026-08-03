@@ -347,9 +347,9 @@
 
     let orderbookCells = null; // { ask: {1:{row,bar,price,vol}, ...10}, bid: {...} }
 
-    function createOrderbookRow(container, side) {
+    function createOrderbookRow(container, side, lvl) {
         const row = document.createElement('div');
-        row.className = `orderbook-row ${side}`;
+        row.className = `orderbook-row ${side}` + (lvl > 5 ? ' far-level' : '');
 
         const bar = document.createElement('div');
         bar.className = 'orderbook-bar';
@@ -379,8 +379,18 @@
         orderbookCells = { ask: {}, bid: {} };
 
         // 매도호가: 10단계(가장 먼 가격)부터 1단계(현재가에 가장 가까운 가격) 순으로 위에서 아래로 배치
-        for (let lvl = 10; lvl >= 1; lvl--) orderbookCells.ask[lvl] = createOrderbookRow(container, 'ask');
-        for (let lvl = 1; lvl <= 10; lvl++) orderbookCells.bid[lvl] = createOrderbookRow(container, 'bid');
+        // 기본으로는 현재가에 가까운 5단계만 보이고, 6~10단계(far-level)는 토글로 펼쳐야 보임
+        for (let lvl = 10; lvl >= 1; lvl--) orderbookCells.ask[lvl] = createOrderbookRow(container, 'ask', lvl);
+        for (let lvl = 1; lvl <= 10; lvl++) orderbookCells.bid[lvl] = createOrderbookRow(container, 'bid', lvl);
+
+        const toggle = document.createElement('div');
+        toggle.className = 'orderbook-toggle';
+        toggle.textContent = '10단계 전체보기 ▾';
+        toggle.addEventListener('click', () => {
+            const expanded = container.classList.toggle('expanded');
+            toggle.textContent = expanded ? '5단계만 보기 ▴' : '10단계 전체보기 ▾';
+        });
+        container.appendChild(toggle);
     }
 
     function updateOrderbookCell(cell, price, vol, maxVol) {

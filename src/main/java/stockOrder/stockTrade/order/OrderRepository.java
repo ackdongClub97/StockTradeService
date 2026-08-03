@@ -14,14 +14,25 @@ public interface OrderRepository extends JpaRepository<Order, String> {
     @Query("SELECT DISTINCT o.stockCode FROM Order o WHERE o.orderStatus IN :orderStatus")
     List<String> findPendingStockList(@Param("orderStatus") List<OrderStatus> orderStatus);
 
-    /* 대기 주문 - 가격 조건은 호가 레벨별로 Java에서 판단하므로 여기서는 종목/구분/상태만 거른다. 시간 오름차순(선착순 우선) */
+    /* 매수 대기 주문 - 가격 우선(지정가가 높을수록 더 공격적인 주문이므로 먼저), 동일 가격이면 시간 우선(선착순).
+       어떤 호가 레벨이 조건에 맞는지는 Java(BookLevels)에서 판단하므로, 여기서는 "여러 경쟁 주문이 같은 호가를
+       두고 어떤 순서로 소진할지"만 정렬한다. */
     @Query("SELECT o FROM Order o WHERE o.stockCode = :stockCode " +
-            "AND o.orderType = :orderType " +
+            "AND o.orderType = stockOrder.stockTrade.order.OrderType.BUY " +
             "AND o.orderStatus IN :orderStatus " +
-            "ORDER BY o.createdAt ASC")
-    List<Order> findPendingByStockCodeAndType(
+            "ORDER BY o.price DESC, o.createdAt ASC")
+    List<Order> findPendingBuyOrders(
             @Param("stockCode") String stockCode,
-            @Param("orderType") OrderType orderType,
+            @Param("orderStatus") List<OrderStatus> orderStatuses
+    );
+
+    /* 매도 대기 주문 - 가격 우선(지정가가 낮을수록 더 공격적인 주문이므로 먼저), 동일 가격이면 시간 우선(선착순) */
+    @Query("SELECT o FROM Order o WHERE o.stockCode = :stockCode " +
+            "AND o.orderType = stockOrder.stockTrade.order.OrderType.SELL " +
+            "AND o.orderStatus IN :orderStatus " +
+            "ORDER BY o.price ASC, o.createdAt ASC")
+    List<Order> findPendingSellOrders(
+            @Param("stockCode") String stockCode,
             @Param("orderStatus") List<OrderStatus> orderStatuses
     );
 

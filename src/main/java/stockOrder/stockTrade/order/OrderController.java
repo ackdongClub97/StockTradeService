@@ -118,7 +118,9 @@ public class OrderController {
                         "price", order.getPrice(),
                         "orderType", order.getOrderType()
                         )).build()
-                );
+                )
+                .doOnSubscribe(s -> log.info("[SSE] order/stream 연결 {}", memberId))
+                .doFinally(signal -> log.info("[SSE] order/stream 종료 {} ({})", memberId, signal));
     }
 
     @GetMapping("/holding")
@@ -151,7 +153,9 @@ public class OrderController {
                 .map(list -> ServerSentEvent.builder()
                         .event("holding")
                         .data((Object) list)
-                        .build());
+                        .build())
+                .doOnSubscribe(s -> log.info("[SSE] holding/stream 연결 {}", memberId))
+                .doFinally(signal -> log.info("[SSE] holding/stream 종료 {} ({})", memberId, signal));
     }
 
     private List<Map<String, Object>> computeHolding(String memberId) {

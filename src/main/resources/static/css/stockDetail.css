@@ -218,6 +218,22 @@
         .orderbook-row.bid .orderbook-price { color: var(--red); }
         .orderbook-vol { color: var(--text-dim); }
 
+        /* 기본으로는 현재가에 가까운 5단계만 노출, 나머지는 토글로 펼침 */
+        .orderbook-row.far-level { display: none; }
+        .orderbook.expanded .orderbook-row.far-level { display: flex; }
+
+        .orderbook-toggle {
+          text-align: center;
+          padding: 8px;
+          font-size: 12px;
+          font-family: 'Noto Sans KR', sans-serif;
+          color: var(--text-dim);
+          cursor: pointer;
+          border-top: 1px solid var(--border);
+          transition: background .15s ease;
+        }
+        .orderbook-toggle:hover { background: var(--border); }
+
         /* ── 뉴스 섹션 ── */
         .section-title {
           font-size: 13px; font-weight: 700;

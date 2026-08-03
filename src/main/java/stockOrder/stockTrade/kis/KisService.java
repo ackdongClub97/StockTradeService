@@ -379,8 +379,8 @@ public class KisService {
         List<Stock> saved = stockRepository.findByDate(today);
 
         if(saved.isEmpty()) {
-            // 오늘 데이터가 없으면 가장 최근 데이터 조회
-            saved =  stockRepository.findToByOrderByDate();
+            // 오늘 데이터가 없으면 가장 최근 "하루치" 데이터만 조회
+            saved = stockRepository.findLatestDateSnapshot();
             log.info("최근 데이터 전송");
         }
 
@@ -399,6 +399,7 @@ public class KisService {
                 return dto;
             }).toList();
 
+            cachedData.clear(); // restartFromDb()는 원래 1회성 호출이지만, 방어적으로 항상 비운 뒤 채운다
             cachedData.addAll(dtos);
         }
     }
