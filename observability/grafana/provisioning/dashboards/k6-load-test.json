@@ -1,0 +1,137 @@
+{
+  "id": null,
+  "uid": "k6-loadtest",
+  "title": "k6 부하테스트 - 메트릭(Prometheus) + 서버로그(Loki)",
+  "tags": ["k6", "loadtest"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "testid",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "query": "label_values(k6_iterations_total, testid)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "http_req_failed rate (k6)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "k6_http_req_failed_rate{testid=~\"$testid\"}",
+          "legendFormat": "http_req_failed"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "order_success_rate (k6)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "k6_order_success_rate_rate{testid=~\"$testid\"}",
+          "legendFormat": "order_success_rate"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "응답시간 p95 (rank/detail/order)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "min": 0 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "k6_rank_duration_p95{testid=~\"$testid\"}",
+          "legendFormat": "rank_duration p95"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "k6_detail_duration_p95{testid=~\"$testid\"}",
+          "legendFormat": "detail_duration p95"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "k6_order_duration_p95{testid=~\"$testid\"}",
+          "legendFormat": "order_duration p95"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "처리량 (iterations/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "min": 0 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "rate(k6_iterations_total{testid=~\"$testid\"}[30s])",
+          "legendFormat": "iterations/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "서버 로그 - ERROR",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "expr": "{app=\"stocktrade\"} |= \"ERROR\""
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "서버 로그 - 전체",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "expr": "{app=\"stocktrade\"}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

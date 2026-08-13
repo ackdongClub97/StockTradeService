@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MatchingServiceTest {
 
-    private static final String ORDER_ID = "ORD-TEST-0001";
+    private static final Long ORDER_ID = 1L;
     private static final String MEMBER_ID = "member1";
     private static final String STOCK_CODE = "005930";
 
@@ -227,5 +227,35 @@ class MatchingServiceTest {
 
         assertEquals(10, order.getMatchedQuantity(), "현재가 매수는 밴드 제한이 없으므로 두 호가 물량(5+5주) 모두 체결돼야 한다");
         assertEquals(OrderStatus.MATCHED, order.getOrderStatus());
+    }
+
+    @Test
+    @DisplayName("5. OrderBook 가격 우선순위 - 매수는 지정가가 높을수록(더 공격적일수록) 먼저 체결된다, 늦게 낸 주문이라도")
+    void OrderBook은_지정가가_높은_매수주문을_시간과_무관하게_먼저_체결시킨다() {
+        // 먼저 생성됐지만 지정가가 낮은(덜 공격적인) 주문
+        Order lowPriceOrder = newBuyOrder(10, 50_000);
+        lowPriceOrder.setOrderId(1L);
+        // 나중에 생성됐지만 지정가가 더 높은(더 공격적인) 주문 - price-time priority상 이쪽이 먼저 체결돼야 함
+        Order highPriceOrder = newBuyOrder(10, 51_000);
+        highPriceOrder.setOrderId(2L);
+        highPriceOrder.setCreatedAt(lowPriceOrder.getCreatedAt().plusSeconds(1));
+
+        // registerOrder 호출 순서도 낮은 가격 먼저 - "먼저 큐에 들어갔다"는 사실 자체가 우선순위에 영향을 주면 안 됨을 같이 검증
+        matchingService.registerOrder(lowPriceOrder);
+        matchingService.registerOrder(highPriceOrder);
+
+        when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(lowPriceOrder));
+        when(orderRepository.findById(2L)).thenReturn(Optional.of(highPriceOrder));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+        // 매도호가 물량이 5주뿐이라 두 주문(각 10주)이 경쟁하는 상황 - 둘 다 이 가격대엔 체결 자격이 있음(5% 밴드 안)
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("50000", "5"));
+
+        matchingService.matching();
+
+        assertEquals(5, highPriceOrder.getMatchedQuantity(), "지정가가 더 높은(더 공격적인) 주문이 먼저 물량 5주를 가져가야 한다");
+        assertEquals(0, lowPriceOrder.getMatchedQuantity(), "지정가가 낮은 주문은 이번 회차 물량이 이미 소진돼서 체결되면 안 된다");
+        assertEquals(OrderStatus.PENDING, lowPriceOrder.getOrderStatus(), "체결 못 한 주문은 그대로 PENDING이어야 한다");
     }
 }

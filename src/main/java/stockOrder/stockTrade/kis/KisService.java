@@ -194,7 +194,11 @@ public class KisService {
         // 실제로 확인해보니 본장(정규장) 외 시간엔 KIS가 살아있는 랭킹 데이터를 안 줌 - 본장에만 실시간 호출하고
         // 나머지 시간엔 저장해둔 마지막(종가) 데이터를 그대로 재전송한다.
         if(!isMarketOpen()) {
-            if(!saveToday && !cachedData.isEmpty()) {
+            // saveToday는 인메모리 플래그라 앱을 재기동하면 항상 false로 돌아온다 - 하루에 여러 번 재기동하면
+            // (개발 중 흔한 상황) 재기동할 때마다 "오늘 아직 저장 안 함"으로 착각해서 같은 날짜 데이터를 중복
+            // 저장하는 버그가 있었다. DB에 오늘 날짜 데이터가 이미 있는지도 같이 확인해서, 재기동으로도 이 가드가
+            // 뚫리지 않게 함(findByDate는 오늘 데이터가 없으면 빈 리스트라 비용도 작음).
+            if(!saveToday && !cachedData.isEmpty() && stockRepository.findByDate(LocalDate.now()).isEmpty()) {
                 saveStockEndData(List.copyOf(cachedData));
                 saveToday = true;
                 log.info("장마감 최종 랭킹 저장");
@@ -382,6 +386,10 @@ public class KisService {
             // 오늘 데이터가 없으면 가장 최근 "하루치" 데이터만 조회
             saved = stockRepository.findLatestDateSnapshot();
             log.info("최근 데이터 전송");
+        } else {
+            // 오늘 데이터가 이미 저장돼 있다는 뜻 - saveToday를 미리 true로 맞춰둬서, 재기동 직후에도
+            // refreshRank()의 DB 중복 저장 가드가 굳이 매 주기마다 findByDate를 다시 안 태우게 함
+            saveToday = true;
         }
 
         if(!saved.isEmpty()) {

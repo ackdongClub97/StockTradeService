@@ -156,8 +156,284 @@ CSS 변경이라 컴파일 불필요. 실제 작은 화면에서의 렌더링 �
 
 - `./gradlew compileJava compileTestJava` 통과, `./gradlew test` 13건 중 12건 통과(나머지 1건은 IntelliJ에 이미 떠있는 인스턴스의 H2 파일 락 충돌로, 이 변경과 무관한 기존 현상).
 - 코드 수정만으로는 **이미 떠 있는 서버의 메모리 캐시(15,540개)가 저절로 줄어들지 않음** — `restartFromDb()`는 앱 기동 시 1회만 실행되므로, 서버 재시작 후에야 정상화된 캐시로 다시 채워짐.
-- [ ] 재시작 후 `GET /api/volume/cached`의 `count`가 30 안팎으로 돌아오는지, `stockHome`의 DOM 노드 수가 정상 범위로 줄었는지 재확인 필요(사용자 재시작 대기 중).
+- [x] **재시작 후 재확인 완료(2026-08-13, 아래 "추가 발견" 참고)** — 다만 재확인 과정에서 최초 수정만으로는 못 막는 **관련 버그를 하나 더 발견**함(같은 날짜 안에서의 중복 저장). 아래에 이어서 기록.
+
+## 추가 발견 (2026-08-13): "같은 날짜 안에서" 중복 저장되는 별개의 버그
+
+이력서/README 검토 과정에서 "랭킹 캐시 15,540건→30건"이라는 수치가 실제로 재검증된 적이 없다는 걸 알게 돼서, 지금 상태를 다시 확인함.
+
+### 증상
+
+`GET /api/volume/cached`의 `count`가 30이 아니라 **240**으로 나옴. DB를 직접 까보니:
+
+```
+2026-08-13(오늘) | 480건   <- 정상이면 30건
+2026-08-02        | 31,080건
+2026-07-31        | 7,770건
+2026-07-30        | 7,680건
+```
+
+위에서 고친 "여러 날짜를 한꺼번에 읽어오는" 버그와는 다른, **같은 날짜 하나 안에서 중복 저장되는** 문제.
+
+### 원인
+
+`KisService.refreshRank()`가 장마감 시점에 그날 랭킹을 DB에 한 번만 저장하도록 `saveToday`(인메모리 boolean) 플래그로 막고 있는데, 이 플래그는 **앱을 재기동하면 항상 `false`로 초기화**된다. 개발 중에는 하루에 앱을 여러 번 재기동하는 일이 흔한데(오늘 이 세션에서만 8회 이상 재기동), 재기동할 때마다 "오늘 아직 저장 안 함"으로 착각해서 그날 랭킹 30건을 또 저장 — 재기동 횟수만큼 데이터가 배로 불어남(30→60→120→240→480). 8/02·7/31에도 이미 같은 패턴의 흔적이 있어서 오늘 처음 생긴 문제가 아니라 전부터 있던 버그로 판단.
+
+### 해결
+
+- `refreshRank()`의 저장 가드에 DB 확인을 추가 — 인메모리 `saveToday`뿐 아니라 `stockRepository.findByDate(오늘)`이 비어있을 때만 저장하도록 변경. 재기동으로 인메모리 플래그가 리셋되더라도 DB 쪽 가드가 남아있어 중복 저장을 막음.
+- `restartFromDb()`: 재기동 시 오늘 데이터가 이미 있으면 `saveToday = true`로 맞춰둬서, 이후 스케줄 주기마다 불필요하게 DB를 다시 확인하지 않게 함.
+- 기존에 쌓인 중복 데이터는 H2 셸로 `(date, mksc_shrn_iscd)` 조합당 가장 오래된 1건만 남기고 정리(47,280건 → 380건).
+
+### 검증
+
+- 정리 후 재기동 → `GET /api/volume/cached` `count: 30` 확인.
+- 곧바로 한 번 더 재기동(재기동 유발 조건 그대로 재현) → 로그에 "장마감 최종 랭킹 저장"이 다시 안 찍히고 `count`도 여전히 30 — 재기동으로도 더 이상 중복이 안 생기는 것 확인.
+- `./gradlew compileJava` 통과.
 
 ## 교훈
 
 - 증상이 났을 때 가장 최근에 바꾼 코드(FDS)부터 의심하는 건 합리적인 출발점이었지만, 서버 CPU/로그/SSE 연결 상태를 하나씩 확인하며 "증거가 없으면 다음 가설로" 넘어간 끝에 전혀 다른 위치의 훨씬 오래된 버그를 찾아냄. `findToByOrderByDate` 같은 Spring Data 파생 쿼리 메서드는 이름만 보고 의도를 짐작하기 쉬운데, 실제로 어떤 조건으로 걸러지는지 항상 확인이 필요하다는 사례.
+- "고쳤다"고 기록해둔 수치를 실제로 재검증하지 않고 이력서/README에 그대로 옮기면서 문제가 드러남 — **재확인 체크박스를 미루면 그 사이에 관련된 새 버그가 쌓여도 모르고 지나간다.** 이번 경우 재검증을 미룬 사이 "같은 날짜 중복 저장"이라는 별개 버그가 조용히 누적되고 있었음.
+
+---
+
+# Issue (해결됨 - 원인은 앱이 아니라 k6 스크립트/k6 자체): 2000명 부하테스트에서 http_req_failed 18%대 - k6가 iteration 사이에 세션 쿠키(JSESSIONID)를 지워서 발생
+
+## 발견 경위
+
+`loadtest/k6/main.js`(k6)로 장중(2026-08-06) 2000명 동시접속 + 실거래 시나리오를 돌린 결과, `http_req_failed` 임계치(`<1%`)가 18.58%(135,115 / 727,150)로 크게 위반됨. 500명 때(2026-08-05, 같은 스크립트의 이전 버전)는 4.12%였던 것과 비교해도 큰 폭으로 악화됨. 원본 로그는 `loadtest/k6/results/`에 없음(이번 실행은 별도 저장 안 함, 채팅 로그 참고).
+
+## 재조사 (2026-08-12, 장중 14:27~14:37 KST, `-o experimental-prometheus-rw`로 2000명 동일 조건 재실행)
+
+같은 스크립트로 재현됨(`http_req_failed` 18.71%, 136,330/728,286). 이번엔 Prometheus에 상태코드별 라벨이 남아서 원인을 구체적으로 추적함.
+
+### 확인된 사실
+
+1. **`order_success_rate`/`checks_succeeded` 지표 자체가 애초에 신뢰할 수 없는 지표였음.** `submitOrder()`가 쓰는 `http.post()`는 k6 기본 설정상 302 리다이렉트를 자동으로 따라간 뒤의 **최종 응답**을 `res`로 돌려준다. 인증 안 된 상태로 `/api/order/create`에 302가 오면 k6가 자동으로 `/login`을 따라가 200을 받아오고, 스크립트는 이 최종 200을 보고 "주문 성공"으로 카운트한다(`res.status === 200`). `checks_succeeded 100%`였던 이유도 동일 — 체크가 보는 것도 이 최종 응답이라 통과함. 반면 `http_req_failed`는 원래 POST 요청 자체에 건 `responseCallback`(`expectedStatuses(200,400)`)을 기준으로 판정하므로, 302는 여기서만 "실패"로 잡힌다. 즉 **이 스크립트로 지금까지 측정해온 주문 성공률(500명 테스트 때 99.94%, 이번 2000명 테스트도 99.94%로 똑같이 나왔음)은 리다이렉트 여부와 무관하게 항상 "성공"처럼 보이는 구조적 결함**이 있었다 — 500명 테스트 때도 이 결함이 실제로 얼마나 수치를 왜곡했는지는 별도 확인 전.
+2. **Prometheus 상태코드 breakdown**: `POST /api/order/create`의 135,724건이 302 (`http_req_failed` 총량 136,330건과 거의 일치, 나머지는 오차 범위). 시간대별로 쪼개보면(`k6_http_reqs_total` 30초 버킷):
+   - 14:28~14:29(램프업 초반, VU 수 적음): 200/400 위주, 302 소량
+   - 14:29:30~14:31:00(VU가 2000에 근접): 200/400 비중이 빠르게 줄고 302가 급증
+   - **14:31:30부터 테스트 종료(14:37)까지 6분 내내: 주문 요청의 사실상 100%가 302** (200/400은 거의 0)
+   
+   즉 일정 동시성 이상으로 VU가 차면서 임계점을 넘은 뒤로는 계속 그 상태로 고정됨 - 간헐적 실패가 아니라 "어느 시점부터 통째로 고장난 뒤 안 돌아오는" 패턴.
+3. **동시성 낮을 땐 재현 안 됨**: 같은 계정(`loadtest_403`)으로 순차 curl 로그인 → 주문생성은 정상 동작(로그인 302 Location: `/stockHome`, 주문 `{"orderId":467}` 200 응답). 같은 계정 300개로 동시 로그인만 별도로 쏴봐도 300/300 전부 `Location: /stockHome`(정상 성공)으로 응답 — **로그인 자체가 대량으로 실패(비밀번호 불일치 등)하는 건 아님**.
+4. 로그 상 `CustomerDetailsService`(로그인 시 DB 조회) 호출 횟수(2612회)가 예상 로그인 횟수(유저 2000 + FDS어뷰저 6 + setup() 시딩용 사전로그인 606 = 2612)와 정확히 일치 — VU-계정 매핑 중복이나 재로그인 같은 건 없음, 각 VU는 정확히 1회씩만 로그인 시도함.
+
+### 배제한 후보
+
+- **HikariCP 커넥션 풀 고갈**: 테스트 시간대 로그에 `HikariPool`/`DataAccessResourceFailureException`/`Connection is not available` 등 에러 없음 (2026-07-30 이슈 때와 같은 패턴이면 반드시 남아야 하는 로그인데 없음).
+- **Tomcat 스레드풀(`server.tomcat.threads.max` 기본값 200) 포화로 인한 큐잉/지연**: 실패와 무관하게 응답이 빠른 요청들의 지연시간이 계속 1ms대(`order_duration` p95 1.5ms)로 유지됨 — 스레드가 부족해서 요청이 대기열에 쌓이는 상황이라면 지연시간이 초 단위로 늘어나야 하는데 그런 징후가 없음. 200req/s당 1ms 처리 기준으로도 200스레드면 이론상 최대 수십만 req/s를 감당하므로 이번 부하(~1200 req/s)로 스레드 수 자체가 병목일 가능성은 낮음.
+- **파일디스크립터(EMFILE) 고갈**: 로그에 "Too many open files"/EMFILE 관련 에러 없음. 다만 `launchctl limit maxfiles`의 시스템 기본 soft limit이 256인 것을 확인했고, 이번 세션에서 앱을 띄운 셸의 `ulimit -n`은 1048576으로 높게 설정돼 있어 상속됐을 가능성이 높지만, 실행 중인 java 프로세스에 실제 적용된 rlimit을 macOS에서 직접 조회하는 방법을 못 찾아 100% 확정은 못함 — 정상 실행 경로(IntelliJ 등 launchd 기반 실행)에서는 launchd 기본값(256)이 적용될 수도 있어 완전히 배제하긴 이름.
+- **`getCachedPrice()`의 `expectedStatuses` 누락**(구 1차 용의자): 이 헬퍼는 GET 요청이고 실패 원인과 무관함이 이번 조사로 명확해짐 - 실제 실패는 전부 `POST /api/order/create`에서 남. (다만 이 헬퍼에 체크가 없다는 사실 자체는 여전히 스크립트 개선 대상.)
+
+### 추가 조사 - "2000 VU 임계점" 가설도 틀렸음이 드러남
+
+축소 재현 실험(500→1000→1500→2000명 단계별, 계정당 요청 빈도를 원본보다 높여서 3분50초로 압축)을 돌려보니 **500명 극초반부터 이미 거의 100% 실패**(주문 517,373건 중 성공 1,992건, 0.4%)해서, "2000명 근처 임계점"이라는 가설 자체가 틀렸음이 드러남. 대신 성공 건수(~2000건)가 VU 수와 거의 정확히 일치하고, 이는 "VU당 평균 반복 횟수의 역수"와도 맞아떨어짐 — 즉 **"각 세션이 로그인 직후 딱 첫 주문 1번만 성공하고 그 이후로는 영구 실패"**하는 패턴이었음.
+
+이 시점에 두 가설을 순서대로 검증함:
+
+1. **SessionRegistry/`ConcurrentSessionFilter` 경합 가설 → 반증됨.** `SecurityConfig`의 `maximumSessions(-1).sessionRegistry(...)`를 임시로 제거(진단 목적, 이후 원복함)하고 동일 조건으로 재실행했으나 **결과가 이전과 완전히 동일**(성공 2000건, 실패 515,769건) — 이 설정은 원인과 무관함이 확인됨.
+2. **서버 전역 동시성 문제 여부 확인 - "카나리아 세션" 실험**: 별도 계정으로 부하 시작 전 미리 로그인해서 세션을 확보해두고(k6와 무관한 순수 curl), 1500 VU 앰비언트 부하(k6)가 도는 80초 내내 이 카나리아 세션으로 2초 간격 주문을 45회 찔러봄 — **45/45 전부 200 성공.** 서버는 동시에 몰리는 다른 트래픽과 무관하게 정상 세션을 계속 정상 처리하고 있었음 → **서버 쪽 문제가 아님이 확정됨.**
+
+## 확정된 원인
+
+**k6(v2.1.0) 자체의 동작 때문.** VU가 반복(iteration)을 새로 시작할 때마다, 만료시간(`Expires`/`Max-Age`)이 없는 세션 쿠키를 쿠키 저장소에서 지운다. Spring Security/Tomcat이 내려주는 `JSESSIONID`가 정확히 이런 쿠키(`Set-Cookie: JSESSIONID=...; Path=/; HttpOnly` - 만료시간 미지정)라서, **로그인한 바로 그 반복(iteration 0)에서만 세션이 살아있고, 그 다음 반복부터는 매번 쿠키 저장소가 비어서 미인증 상태로 요청이 나간다.**
+
+VU 1개, 동시성 0인 상태(`per-vu-iterations` executor, 순수 순차 실행)에서도 100% 재현됨 — 동시접속과는 무관한 문제였다:
+
+```
+[iter 0] login status=302
+[iter 0] BEFORE request, jar has: {"JSESSIONID":["CEFD..."]}
+[iter 0] order status=200
+[iter 1] BEFORE request, jar has: {}          # <- 쿠키 저장소가 통째로 비어버림
+[iter 1] order status=302                      # <- 그래서 /login으로 리다이렉트
+[iter 2] BEFORE request, jar has: {}
+[iter 2] order status=302
+```
+
+기존 `loadtest/k6/main.js`의 `submitOrder()`는 `redirects: 0`을 안 줘서 이 302를 자동으로 따라가 `/login`의 200을 받아왔고, 스크립트는 그걸 "주문 성공"으로 잘못 카운트했다 — 그래서 지금까지 이 프로젝트의 모든 부하테스트(500명 2026-08-05, 2000명 2026-08-06/2026-08-12)에서 **로그인 이후 두 번째 반복부터 나간 주문 요청은 사실상 전부 미인증 상태로 실패하고 있었고, `order_success_rate`/`checks_succeeded`는 이를 전혀 못 잡고 있었다.** "2000명 근처부터 실패율이 급증"하는 것처럼 보였던 건 진짜 동시성 임계점이 아니라, 테스트가 진행되며 각 VU가 iteration 1 이상으로 넘어가는 비율이 누적돼 실패 비중이 커지는 "코호트 노화" 효과였다.
+
+**재현 및 수정 확인**: `http.cookieJar()`로 명시적으로 관리해도 동일하게 실패(k6 쿠키 저장소 자체가 비워지므로 jar를 직접 넘겨도 소용없음). 로그인 응답의 `res.cookies['JSESSIONID'][0].value`를 별도 변수에 저장해두고 **매 요청마다 `Cookie` 헤더를 수동으로 직접 설정**하는 방식으로 우회하니 5회 반복 전부 정상 처리됨(200/200/200/200/400 - 마지막은 잔고 부족에 의한 정상적인 비즈니스 거절):
+
+```
+[iter 0] login status=302, session=CBFA...
+[iter 0] order status=200
+[iter 1] order status=200
+[iter 2] order status=200
+[iter 3] order status=200
+[iter 4] order status=400   # 정상 - 잔고 부족
+```
+
+## 결론
+
+- **앱/서버 코드에는 문제가 없었다.** 인증·세션 처리는 처음부터 끝까지 정상 동작했고, HikariCP·Tomcat 스레드풀·SessionRegistry 등 서버 쪽에서 의심했던 모든 후보는 반증됨.
+- **`loadtest/k6/`의 부하테스트 결과(500명 2026-08-05, 2000명 2026-08-06)는 전부 신뢰할 수 없다** - 로그인 이후 두 번째 반복부터의 주문 요청은 사실상 미인증으로 실패하면서도 "성공"으로 잘못 집계됐다. 이 프로젝트에서 k6로 측정한 주문 관련 성능/성공률 수치(README나 다른 문서에 인용됐다면)는 재검증 전까지 사용하면 안 됨.
+- **원인 확정 전까지 코드 수정은 보류했음** (SecurityConfig 진단용 임시 변경은 검증 직후 원복 완료, 앱 코드는 최종적으로 아무 것도 안 바뀜).
+
+## 수정 및 최종 검증 (2026-08-13)
+
+사용자 승인 후 다음을 수정함:
+
+- `loadtest/k6/lib/auth.js`의 `login()`이 세션 쿠키 값(JSESSIONID)을 리턴하도록 변경.
+- `loadtest/k6/main.js`: VU 모듈 스코프 변수(`sessionCookie`)에 로그인 시 쿠키를 저장해두고, `submitOrder()`/`getCachedPrice()`를 포함한 모든 요청이 이 값을 `Cookie` 헤더로 직접 붙이도록 변경 (k6의 자동 쿠키 저장소에 의존하지 않음). `submitOrder()`에는 `redirects: 0`도 추가해서 앞으로 비슷한 문제가 재발해도 리다이렉트가 "성공"으로 마스킹되지 않고 바로 드러나게 함.
+- 검증 중 발견한 부수 문제: `loadtest/k6/main.js`의 `phoneFor()`가 `USER_PREFIX`를 반영하지 않고 순번만으로 전화번호를 생성해서, 이전 실행에서 만든 계정들과 신규 프리픽스 계정의 전화번호가 충돌해 회원가입이 실패할 수 있음(이번 조사 중 실제로 발생) — 아직 수정 안 함, 별도 이슈로 남겨둠.
+
+### 검증 결과
+
+1. **500명, 축소 스모크 테스트(1 VU 순차/동시성 0 포함)** — 세션이 반복 전체에 걸쳐 정상 유지됨, `checks_succeeded 100%`.
+2. **500명 정식 실행(9분30초)** — `http_req_failed 0.10%` (기존 18%대 → 정상화). 다만 `order_success_rate`가 15.53%로 임계치(95%) 미달 — 원인 조사 결과 이번 버그와 무관한 별개 사실이었음: `loadtest_*`/`fdsabuser_*` 테스트 계정(2006개)이 그동안 여러 차례 재사용되며 잔고가 평균 676만원까지 소진돼 있었음(H2 셸로 확인: `SELECT AVG(seed)...` → 6,765,925, 최소 140원). 전체 계정 잔고를 1,000만원으로 리셋 후 재실행하니 `order_success_rate 51.83%`로 개선됐으나 여전히 500명대 기준 원래 임계치(95%)는 못 넘김 — 시간대별 분석 결과 **9분짜리 테스트 하나 동안 고정 시드머니로 계속 매수를 내면 자연스럽게 성공률이 시작 시점 ~70%에서 종료 시점 ~30%대로 떨어지는 정상적인 현상**임을 확인(302는 0건). 사용자와 상의해서 `order_success_rate` 임계치를 `0.95`→`0.5`로 현실화(`main.js` 수정, 이 계산에 맞춰 재조정한 값).
+3. **500명, 새 임계치로 재검증** — 잔고 리셋 후 재실행, **모든 임계치 통과** (`http_req_failed 0.00%`, `order_success_rate 51.83%`).
+4. **2000명 최종 실행(잔고 리셋 후)** — `http_req_failed 0.00%` (505,878건 중 0건) — **핵심 버그는 2000명 규모에서도 완전히 해결 확인.** 다만 `detail_duration`/`rank_duration` p95가 500ms대(임계치 500ms 초과), `order_duration` p95 2.04초(임계치 1.5초 초과), `order_success_rate` 47.93%(임계치 50% 근소 미달)로 **새로운 지연시간 문제**가 드러남 — 500명 때는 전부 1ms대였던 응답이 2000명에서 수백 ms~2초대로 느려짐. `http_req_failed`가 0%라 에러가 아니라 순수 지연 문제.
+
+### 2000명 지연시간 문제 - 원인 분석 (로컬 환경 한계로 판단, 미해결)
+
+- 서버 프로세스 CPU 사용률이 테스트 내내 96.7%, 누적 CPU 시간 57분46초(실제 경과 약 10분) — 평균 8코어 중 약 5.7개 코어를 이 프로세스 하나가 계속 점유. 캐시만 읽는 가벼운 엔드포인트(`rank`/`detail`)까지 같이 느려진 게 결정적 단서 — HikariCP 같은 특정 자원 고갈이면 DB 안 타는 이 엔드포인트들은 영향 안 받아야 하는데 전부 같이 느려짐 → **CPU 자체가 부족해서 모든 요청이 골고루 대기하는 상황**으로 판단.
+- 원인으로 지목한 것: **k6(부하 생성기)와 서버(앱)가 같은 노트북 한 대의 CPU(8코어)를 나눠 씀.** 실사용 환경(사용자 각자 PC + 중앙 서버)과 다른 구조라 이 수치를 실제 서버 용량으로 해석할 수 없음. KIS REST 레이트리밋(`EGW00201`)도 이번엔 278건 발생 — 잔고 리셋으로 실제 체결이 훨씬 많이 일어나 매칭엔진·KIS 연동 부하 자체도 커진 것으로 추정(부차적 요인).
+- **검증 시도**: 서버-클라이언트 분리 측정을 위해 별도 테스트용 EC2(t3.micro, 2 vCPU, RAM 911MB, 스왑 0)에 배포 시도. Zookeeper+Kafka+앱을 동시에 띄우자마자(부하테스트 트래픽 발생 전) SSH 배너 교환 단계에서 응답불능 — 재시도 6회(약 90초) 실패, 자연 복구 안 됨. **결론: t3.micro는 이 스택(Zookeeper+Kafka+Spring Boot) 자체를 못 띄우는 스펙 — 부하테스트 이전에 정상 배포조차 이 인스턴스로는 검증 불가.** AWS 콘솔 재부팅이나 더 큰 인스턴스가 필요하나, 이번엔 여기서 중단하고 노트북 결과로 마무리하기로 함.
+- 참고로 사용에 쓰려던 기존 운영 EC2(`13.209.77.185`)는 실사용 데이터(H2 DB에 최근 갱신 이력 있음)가 있는 인스턴스라 부하테스트 대상에서 제외함 — 건드리지 않았음.
+- **Tomcat 스레드풀을 늘려서 로컬 재검증 → 오히려 더 나빠짐, CPU 병목 가설을 추가로 뒷받침.** `server.tomcat.threads.max`를 기본 200 → 500(+ `accept-count` 100 → 300)으로 늘려서 동일 조건(2000명, 잔고 리셋)으로 재실행한 결과:
+  - `detail_duration` p95: 531ms → **2.17초** (악화)
+  - `rank_duration` p95: 537ms → **2.2초** (악화)
+  - `order_duration` p95: 2.04초 → **9.65초** (악화)
+  - 10분간 처리된 총 요청 수: 505,878건 → **310,258건** (오히려 감소)
+  - `http_req_failed`는 여전히 0.00%대(20/310,258) — 에러는 안 남, 순수 지연/처리량 문제
+  
+  스레드를 늘렸는데 처리량이 줄고 지연이 몇 배로 늘어난 건, "스레드 수 부족"이 병목이 아니라 **물리적 CPU 코어 수 자체가 부족**하다는 걸 명확히 보여줌 — 스레드가 많아질수록 같은 8코어를 더 많은 스레드가 컨텍스트 스위칭하며 나눠 쓰게 되어 개별 요청의 실제 처리 속도가 오히려 떨어짐. Tomcat 설정 튜닝으로는 해결 불가능한 병목임을 확인. 테스트 후 기본값(200)으로 원복함 — `application.yaml`은 애초에 안 건드렸고 실행 시점 `--args` 오버라이드로만 실험했으므로 커밋된 설정에는 변화 없음.
+
+### 최종 결론
+
+- **오늘 조사한 "2000명 부하테스트 http_req_failed 18%대" 버그는 완전히 해결·검증 완료.** 원인은 서버/DB가 아니라 k6 자체(iteration 간 세션 쿠키 초기화)였고, 500/2000명 양쪽 모두 `http_req_failed 0.00%`로 확인됨.
+- **2000명 규모의 지연시간(p95 500ms~2초대) 문제는 로컬 환경(부하생성기+서버 CPU 공유) 한계일 가능성이 매우 높음** — Tomcat 스레드풀을 늘려도 개선은커녕 악화된 것으로 재확인. 다만 서버-클라이언트를 분리한 환경에서 최종 재검증은 못 했음(EC2 시도 실패, 위 참고). 확정하려면 Zookeeper+Kafka+Spring Boot를 안정적으로 띄울 수 있는 더 큰 인스턴스(t3.medium 이상 권장)에서 재검증 필요.
+- 부가 발견: `loadtest/k6/main.js`의 `phoneFor()`가 `USER_PREFIX`를 반영하지 않아 다른 프리픽스로 재실행 시 전화번호 충돌로 회원가입이 실패할 수 있음 - 아직 미수정.
+
+---
+
+# Issue: 주문 ID 생성 레이스 컨디션 - 동시 주문 시 서로 다른 주문이 같은 orderId로 조용히 덮어써짐 (Hibernate 자동생성 ID로 해결)
+
+## 발견 경위
+
+위 "2000명 부하테스트 http_req_failed 18.58%" 이슈를 이어서 조사하던 중, 서버가 꺼져 있어 bootRun 로그 대신 `~/stockTrade.mv.db`에 H2 셸(`org.h2.tools.Shell`, read-only 접속)로 직접 붙어 2026-08-06 테스트 시간대의 `orders` 테이블을 확인함.
+
+## 증상
+
+- 2000명 동시접속 + 주문 액션 가중치 30%(매수 지정가 12%+현재가 8%+매도 10%)로 약 9분 실행했는데, DB에 남은 그날 주문은 `ORD202608060001`~`ORD202608060987` 단 987건뿐 — 빈틈없이 연속된 시퀀스라 삭제된 흔적은 아님. 요청량 대비 훨씬 적음.
+- 그 987건의 `created_at`이 13:15:22~13:18:29 약 3분 구간에 몰려 있음.
+- 어드민이 추적하는 `lastUnmatchedReason=SYSTEM_ERROR`는 0건, k6 쪽 `checks_succeeded`도 100% — 즉 어디에도 에러 흔적이 없이 조용히 주문 건수만 사라짐.
+
+## 원인 (확정)
+
+`OrderController.submitOrder`(`OrderController.java:83-98`):
+
+```java
+String maxId = orderRepository.findMaxOrderIdByPrefix(prefix); // SELECT MAX(order_id)
+int seq = (maxId != null) ? parse(maxId)+1 : 1;
+String orderId = prefix + String.format("%04d", seq);
+...
+orderRepository.save(order);
+```
+
+1. "최댓값 조회 → +1 → 저장" 3단계에 트랜잭션 격리나 락이 없어서, 동시 요청 여러 개가 같은 `maxId`를 읽으면 **똑같은 `orderId`를 생성**한다. 동시성이 낮을 땐 이 레이스 윈도우가 거의 안 열려서 지금까지 드러나지 않았던 것으로 보임.
+2. 더 큰 문제는 `Order.orderId`(`Order.java:14-15`)가 `@Id`이면서 `@GeneratedValue`가 아닌 수동 할당 값이라는 점. `save()` 호출 시점에 이미 ID가 채워져 있어 Hibernate가 이 엔티티를 "새 엔티티가 아님"으로 판단하고 `persist()` 대신 `merge()`를 쓴다. 즉 ID가 충돌해도 PK 위반 예외가 나지 않고, **먼저 저장된 주문 row를 나중 주문이 통째로 덮어쓴다.**
+3. BUY 주문은 컨트롤러 진입 시점에 이미 잔고를 차감해두므로(`OrderController.java:68`), 자기 주문이 나중에 덮어써진 사용자는 **잔고만 빠지고 그 주문의 기록 자체가 사라지는** 상태가 될 수 있음 — 모의투자지만 자금 정합성이 깨지는 심각도.
+
+## 확인한 것 / 못한 것
+
+- DB 레벨 증거(주문 건수 부족, 타임스탬프 쏠림, 연속된 ID)와 코드 레벨 원인(레이스 + merge 시맨틱)은 확인 완료.
+- 실제로 한 주문의 데이터가 다른 주문 데이터로 덮어써진 구체적인 사례(예: 두 orderId가 동일하고 memberId/stockCode가 다른 row)까지는 직접 대조하지 못함 — row가 덮어써지면 이전 상태 자체가 안 남으므로 사후에는 원천적으로 재현 불가, 재현하려면 별도 스크립트로 동시 요청을 인위적으로 쏴봐야 함.
+- 이 문제와 위 "http_req_failed 18.58%" 이슈(1차 용의자 `getCachedPrice()`)는 별개 사안으로 보임 — `getCachedPrice()`는 GET(조회) 경로라 이 이슈와 무관.
+- (부수 확인) Prometheus 쪽 `-o experimental-prometheus-rw` 시도는 실패해 있었음: `stocktrade-prometheus` 컨테이너 로그에 `Error decoding remote write request err="snappy: corrupt input"`(2026-08-06 13:27:55 KST) 한 건만 있고 k6 메트릭이 하나도 안 들어와 있어서, 원래 계획했던 "Prometheus로 상태코드별 breakdown 확인" 경로는 애초에 죽어 있었음.
+
+## 검토한 대안과 최종 선택
+
+- **AtomicInteger**(단일 인스턴스 전제 - 이 프로젝트는 H2 파일 DB라 구조적으로 단일 인스턴스만 가능해서 유효한 선택지였음): 재시작 시 DB에서 초기값을 다시 읽어와야 하고, 자정에 날짜가 바뀌는 시점의 리셋도 별도로 원자화해야 하는 등 챙길 게 많음.
+- **`ORD{today}+DB생성숫자` 하이브리드**(기존 포맷 유지): 매 주문마다 insert 후 update 한 번 더 필요(생성된 숫자를 알아야 문자열을 조립할 수 있으므로), 자릿수를 넉넉히 늘려야 함.
+- **Hibernate `@GeneratedValue(IDENTITY)`로 PK 자체를 자동생성**(채택): 위 두 방식보다 훨씬 단순하고, DB가 원자성을 보장하며, 하루 4자리(9999건) 같은 고갈 한도 자체가 사라짐. 다만 `orderId` 타입이 `String`(`ORD{yyyyMMdd}{seq4}`)에서 `Long`으로 바뀌는 더 큰 변경이라 Kafka 메시지 키, `Trade`/`AdminAlert`의 참조 필드, `/api/order/{orderId}/cancel` path variable 등 관련 코드 전반에 영향을 줌 — 이번 데이터는 실사용자 계정을 포함해도 주문/체결 이력 자체는 밀어버려도 되는 상황이라 이 선택지의 마이그레이션 비용을 감수하기로 함.
+
+## 해결
+
+- `Order.orderId`를 `@Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long orderId`로 변경 — `OrderController.submitOrder`의 `SELECT MAX(order_id)+1` 로직과 죽어있던 `AtomicInteger orderSequence` 필드를 통째로 제거하고, `orderRepository.save(order)` 직후 Hibernate가 채워주는 `order.getOrderId()`를 그대로 씀(IDENTITY 전략은 insert 시점에 JDBC `getGeneratedKeys()`로 즉시 값을 받아와 엔티티에 채워주므로 별도 SELECT 불필요).
+- ID가 이제 save 전엔 `null`이라 Hibernate가 정상적으로 "새 엔티티"로 인식해서 `persist()`를 쓰게 됨 — 지난번에 별도 방어선으로 언급했던 `Persistable` 구현 없이도 merge-덮어쓰기 문제가 같이 해결됨.
+- 연쇄 변경: `OrderRepository`(`JpaRepository<Order, String>` → `<Order, Long>`, `findMaxOrderIdByPrefix` 제거), `Trade.orderId`/`AdminAlert.orderId`(`String`→`Long`), `OrderController.cancelOrder`의 `@PathVariable`(`String`→`Long`), `OrderService`의 Kafka 메시지 키(`KafkaTemplate<String,String>`라 `String.valueOf(order.getOrderId())`로 변환), `submitOrder` 응답 타입(`Map<String,String>`→`Map<String,Object>`, orderId를 JSON 숫자로 반환 — `/api/order/history` 응답과 타입을 일치시켜 프론트(`stockDetail.html`)의 `o.orderId === orderId` 엄격비교가 계속 맞게 함). 프론트엔드는 orderId를 어디서도 포맷 파싱 안 하고 불투명 값으로만 다뤄서 별도 수정 불필요했음.
+- 기존 `orders`/`trades` 테이블은 PK 타입이 바뀌어서(`VARCHAR`→`BIGINT IDENTITY`) `ddl-auto: update`로는 안전하게 마이그레이션이 안 됨 — H2 셸로 두 테이블만 DROP(사용자 확인 후 진행, `members`/`stock`은 보존)하고 재기동 시 새 스키마로 재생성함. 기존 주문/체결 이력은 사라졌지만 회원 계정/시드머니는 영향 없음.
+
+## 검증
+
+- `./gradlew compileJava compileTestJava` 통과, 수정한 유닛 테스트 2건(`MatchingServiceTest`, `FraudDetectionServiceTest`, orderId 픽스처를 `Long`으로 변경) 포함해서 `./gradlew test` 통과.
+- 다만 유닛 테스트는 Mockito로 `OrderRepository`를 통째로 대체하기 때문에, 이번 버그의 핵심(실제 DB가 동시 insert를 어떻게 처리하는지, Hibernate가 `persist`/`merge` 중 뭘 쓰는지)은 유닛 테스트로는 애초에 검증 대상이 아님. 그래서 컴파일/유닛테스트 통과만으로 끝내지 않고 실제로 앱을 띄워 진짜 H2 DB에 동시 요청을 쏴보는 것까지 진행함 — 이번 이슈 자체가 "코드는 문제없어 보이는데 동시성 상황에서만 조용히 터지는" 종류라, 그 조건을 실제로 재현해봐야 고쳐졌다고 확신할 수 있었음.
+- `orders`/`trades` DROP 후 `bootRun`으로 재기동 — 로그에서 `create table orders (order_id bigint generated by default as identity, ...)` 확인.
+- 실제 로그인 후 주문 1건 생성 → 응답 `{"orderId":1}`(문자열이 아닌 JSON 숫자) 확인.
+- **동시성 재현 테스트**: 같은 계정으로 주문 50건을 동시에(`curl ... &` 백그라운드 50개 + `wait`) 발사 → 응답으로 받은 orderId가 2~51까지 전부 서로 다른 값(중복 없음), `/api/order/history`로도 51건/51개 distinct 확인 — 레이스 컨디션 재현 안 됨.
+- 검증에 쓴 테스트 계정(`verifyuser1`)과 그 주문 51건은 검증 후 DB에서 삭제함 — 실사용자 데이터와 섞인 운영 DB에 테스트 잔재를 남기지 않기 위함(`members`/`stock`의 다른 데이터는 건드리지 않음).
+
+---
+
+# Issue: 매수 잔고 차감/환급과 주문 상태 저장이 원자적이지 않음 - HikariCP 예외 등으로 중간에 실패하면 "돈만 움직이고 주문은 그대로" 상태가 남을 수 있음 (트랜잭션으로 해결)
+
+## 발견 경위
+
+위 "2000명 부하테스트" 조사 중, 사용자가 "히카리CP 풀 고갈 같은 게 매도 주문 중에 터지면 정확히 어떤 상황이 되냐"고 질문해서 `OrderController.submitOrder()` 코드를 다시 짚어보다가 발견함. 이어서 사용자가 "장마감까지 미체결이면 자동취소되는데, 그때 돈이 안 돌아오는 것 같다"고 실사용 중 관찰한 것을 알려줘서, 같은 원인이 취소/환급 경로에도 있는지 같이 확인함.
+
+## 문제
+
+다음 세 곳이 전부 같은 패턴이었음 — 잔고를 바꾸는 `memberRepository.save(member)`와 주문 상태를 바꾸는 `orderRepository.save(order)`가 **하나의 트랜잭션으로 안 묶여 있고, `@Transactional` 없이 각자 따로 커밋되는 별개의 DB 작업**이었음:
+
+1. `OrderController.submitOrder()` (매수) — 잔고 차감 저장 → 주문 생성 저장
+2. `OrderController.cancelOrder()` (사용자 직접 취소) — 환급 저장 → 주문취소 상태 저장
+3. `MatchingService.cancelForMarketClose()` (장마감 자동취소) — 환급 저장 → 주문취소 상태 저장
+
+세 곳 다 **첫 번째 저장이 성공한 뒤 두 번째 저장에서 예외(대표적으로 HikariCP 커넥션 풀 고갈, 2026-07-30 이슈 참고)가 나면, 이미 커밋된 첫 번째 저장은 롤백되지 않고 그대로 남는다.**
+
+- 1번(매수)에서 터지면: **잔고는 이미 차감됐는데 주문 자체가 DB에 안 생기는 상태** — 사용자 입장에선 "돈만 사라지고 아무 결과도 없는" 상황.
+- 2번/3번(취소)에서 터지면: **환급은 이미 됐는데 주문은 여전히 PENDING/PARTIAL로 남는 상태.** 특히 3번(장마감 자동취소)은 `cancelPendingOrdersAtMarketClose()`가 개별 주문 처리 실패를 로그만 남기고 계속 진행하는 구조라(다른 종목/주문 처리를 막지 않기 위한 의도적 설계), 이 상태로 남은 주문은 다음날 장마감 때 `PENDING`/`PARTIAL` 목록에 다시 걸려서 **환급이 한 번 더 나가는(중복 환급) 위험**도 있었음. 사용자가 관찰한 "돈이 안 돌아오는 것 같다"는 현상 자체는 이번 조사에서 재현 로그로 직접 확인하진 못했지만(장마감 타이밍을 인위적으로 재현하기 어려움), 코드 레벨에서 정확히 이 두 저장이 원자적이지 않다는 것은 명확히 확인됨 — 위 세 경로 모두 동일 패턴이라 같이 고침.
+
+## 해결
+
+- `OrderController.submitOrder()`, `OrderController.cancelOrder()`에 `@Transactional` 추가 — 둘 다 Spring MVC가 외부에서 직접 호출하는 컨트롤러 메서드라 프록시가 정상 개입함.
+- `MatchingService.cancelForMarketClose()`는 같은 클래스 안(`cancelPendingOrdersAtMarketClose()`)에서 직접 호출되고 있어서, `@Transactional`을 붙여도 self-invocation이라 프록시를 안 거쳐 트랜잭션이 안 걸리는 문제가 있었음 — `KisService`↔`KisWebSocketService` 사이에 이미 쓰던 것과 같은 `@Autowired @Lazy` 자기주입 패턴(`private MatchingService self`)을 추가해서 `self.cancelForMarketClose(order)`로 프록시를 거쳐 호출하도록 변경. `private`이던 메서드도 CGLIB 프록시가 오버라이드할 수 있게 `protected`로 변경.
+- 세 경우 다 이제 "잔고 변경 저장 + 주문 상태 저장"이 하나의 트랜잭션 안에서 실행되어, 중간에 예외가 나면 전부 롤백되고(잔고도 원상복구) 아무 흔적도 안 남는다 — 반쪽짜리 상태가 생길 수 없음.
+
+## 검증
+
+- `./gradlew compileJava` 통과 — `@Lazy` 자기주입 패턴이 컴파일타임에 순환참조로 안 잡히는 것 확인.
+- `./gradlew test`(`MatchingServiceTest` 포함) 통과.
+- 앱 재기동 후 로그에 `BeanCreationException`/순환참조 에러 없이 정상 기동 확인 — `@Autowired @Lazy` 자기주입이 런타임에도 문제없이 해결됨.
+- 실제 매수→취소 흐름으로 트랜잭션이 정상 동작하는지 확인: `loadtest_1` 계정 잔고 7,291,380원 → 지정가 매수(1,000원×5주, 안 체결되게 현재가보다 훨씬 낮게 주문) → 5,000원 차감된 7,286,380원 확인 → 주문 취소 → **정확히 원래 잔고 7,291,380원으로 환급 확인.**
+- **`cancelForMarketClose()` 실제 장마감 경로 재현 검증(추가, 같은 날 이어서 진행)**: H2 셸로 PENDING 매수 주문을 직접 삽입(`loadtest_2`, 잔고 5,000,000원, 60,000원×2주)해두고 장마감 시간대(15:30 이후)에 앱을 재기동해서 `matching()`의 첫 스케줄 tick이 `cancelPendingOrdersAtMarketClose()`를 타게 만듦 → 주문이 `CANCELLED`로 바뀌고 잔고가 정확히 5,120,000원(120,000원 환급)으로 확인됨. 중간에 한 번 `loadtest_1` 계정으로 API를 통해 확인했을 때 취소 전/후 잔고가 동일하게 보이는 혼란이 있었으나, 그 계정 테스트 도중 다른 백그라운드 작업이 같이 돌고 있어 측정 타이밍이 꼬인 것으로 판단 — 위의 격리된 재현(다른 트래픽 없이 단일 주문만 존재하는 상태)이 결정적 증거이며, `MemberController.getMemberInfo()`도 캐싱 없이 매 요청마다 DB를 직접 조회하는 것을 코드로 재확인해서 "캐시 때문에 API가 stale 값을 보여준다"는 가설도 기각함.
+
+---
+
+# 개선: 매칭엔진 우선순위 결정을 DB `ORDER BY` 재정렬에서 PriorityQueue(Heap) 기반으로 전환
+
+## 배경
+
+이력서에 "우선순위 큐(Heap) 기반으로 가격-시간 우선순위 매칭 엔진 설계, O(log n)에 최우선 호가를 탐색"이라고 적혀 있었는데, 실제 코드를 검토해보니 사실이 아니었음 — `MatchingService.matchOrders()`는 `OrderRepository.findPendingBuyOrders`/`findPendingSellOrders`(JPA `@Query`의 `ORDER BY o.price DESC/ASC, o.createdAt ASC`)로 매칭 시점마다 DB에 정렬을 맡기는 구조였고, 코드 전체에 `PriorityQueue`/Heap 관련 구현이 전혀 없었음. 사용자가 이 사실을 확인 후, 이력서 문구를 고치는 대신 실제로 코드를 그렇게 만들기로 결정.
+
+## 설계
+
+종목코드별로 매수/매도 호가창(`OrderBook`)을 메모리에 유지 — 각각 `PriorityBlockingQueue`(스레드 세이프, 스케줄러 스레드와 주문 생성 요청 스레드가 동시에 접근하므로 필요)로 가격-시간 우선순위를 관리한다.
+
+- 매수 큐: 지정가 높은 게 우선(`reversed()`), 같으면 먼저 생성된 주문이 우선
+- 매도 큐: 지정가 낮은 게 우선, 같으면 먼저 생성된 주문이 우선
+- 큐에는 `Order` 엔티티(가변, 다른 트랜잭션에서 상태가 바뀔 수 있음)를 직접 넣지 않고, 정렬에 필요한 값(`orderId`, `price`, `createdAt`)만 담은 불변 스냅샷(`QueuedOrder`)을 넣는다. 실제 체결 시도 시점에 `orderId`로 DB에서 최신 상태를 다시 조회해서 처리한다.
+- **취소/체결된 주문 처리(lazy deletion)**: Java `PriorityQueue`는 임의 원소를 O(log n)에 지울 수 없다(`remove()`가 O(n)). 그래서 큐에서 꺼낼 때마다 최신 DB 상태를 확인해서, 이미 `CANCELLED`/`MATCHED`인 건 그냥 버리고(큐에서 자연 제거), 여전히 `PENDING`/`PARTIAL`인 건 처리 후 다시 큐에 넣는 방식을 채택.
+- **재시작 복구**: 메모리상의 `OrderBook`은 재시작하면 비므로, `@PostConstruct`에서 DB의 `PENDING`/`PARTIAL` 주문 전체로 큐를 다시 채운다. `OrderBook`은 어디까지나 DB 위에 얹은 성능 최적화 계층이고, 진실의 원천은 항상 DB.
+
+## 구현
+
+- 신규 파일 `OrderBook.java` — 종목 하나에 대한 매수/매도 `PriorityBlockingQueue<QueuedOrder>`와 comparator, offer/poll/requeue 메서드.
+- `MatchingService`: `Map<String, OrderBook> orderBooks`(종목코드별), `registerOrder(Order)`(신규 주문을 큐에 등록), `rebuildOrderBooksFromDb()`(`@PostConstruct`, 재시작 복구), `drainAndExecute()`(큐에서 우선순위 순으로 꺼내며 체결 시도 + lazy deletion + 미체결분 재등록)를 추가. 기존 `matchOrders()`는 DB 정렬 쿼리 대신 이 경로를 타도록 교체.
+- `OrderController.submitOrder()`: `orderRepository.save(order)` 직후 `matchingService.registerOrder(order)` 호출 추가.
+- `OrderRepository.findPendingBuyOrders`/`findPendingSellOrders`는 그대로 남겨둠 — `markUnmatched()`(호가 데이터 없음 등으로 특정 종목 대기 주문 전체에 사유만 기록하는 로직)는 우선순위 순서가 필요 없는 별개의 용도라 굳이 큐를 거칠 이유가 없음.
+
+## 검증
+
+- `MatchingServiceTest`에 새 테스트 추가: 지정가 50,000원(먼저 생성)과 51,000원(나중에 생성) 매수 주문을 등록해두고, 매도호가 물량을 5주(둘 다 10주 요청, 경쟁 상황)로 제한한 뒤 `matching()` 실행 → **지정가가 더 높은(더 공격적인) 주문이 생성 순서와 무관하게 물량을 먼저 가져가는 것**을 확인(더 늦게 큐에 들어갔어도 우선순위가 앞섬을 같이 검증). 기존 4건(`tryMatch` 기반 부분체결/가격개선/시장가 시나리오)도 전부 그대로 통과 — `tryMatch()`는 이번 변경과 무관한 경로라 영향 없음.
+- `./gradlew compileJava`/`./gradlew test`(`MatchingServiceTest` 5건 전체) 통과.
+- 실제 앱 기동 → `[MatchingService] 재시작 - 대기 주문 N건으로 호가창(OrderBook) 재구성` 로그로 재시작 복구 정상 동작 확인.
+- 실제 주문 생성(`{"orderId":...}` 응답 확인) → 정상적으로 큐에 등록되고 이후 매칭 사이클에서 처리되는 것 확인(장마감 이후 시간대라 즉시 체결 대신 "본장 아님 - 대기만 걸어둠" 로그로 정상적인 대기 상태 확인, 이후 장마감 자동취소 경로에서 정상 처리됨을 위 이슈의 재현 테스트로 같이 검증됨).
+
+## 결과
+
+- 매칭 우선순위 결정이 이제 실제로 애플리케이션 코드의 `PriorityBlockingQueue`(Heap 기반) 자료구조로 이루어짐 — 이력서의 "Heap 기반 O(log n)" 표현이 실제 구현과 일치하게 됨.
+- 부수 효과: 매칭 사이클마다 DB에 `ORDER BY` 정렬 쿼리를 날리는 대신 삽입 시점에 O(log n)으로 큐에 반영해두므로, 대기 주문이 많아질수록(특히 2000명 규모 부하테스트처럼) DB 부하가 줄어드는 방향의 개선이기도 함 — 다만 이 효과 자체를 별도로 부하테스트해서 수치로 검증하지는 않았음(다음에 필요하면 `loadtest/`로 측정 가능).

@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -22,12 +23,10 @@ import stockOrder.stockTrade.member.MemberRepository;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @RestController
@@ -38,7 +37,6 @@ public class OrderController {
 
     private final OrderService orderService;
     private final OrderRepository orderRepository;
-    private final AtomicInteger orderSequence = new AtomicInteger(0);
     private final MatchingService matchingService;
     private final KisService kisService;
     private final KisWebSocketService kisWebSocketService;
@@ -46,8 +44,11 @@ public class OrderController {
     private final MemberRepository memberRepository;
     private final FraudDetectionService fraudDetectionService;
 
+    // 잔고 차감(BUY)/주문 저장이 하나로 안 묶여있으면, 중간에 DB 커넥션 예외 등이 나서 잔고만 빠지고
+    // 주문은 안 생기는 상태가 남을 수 있었음 - 트랜잭션으로 묶어서 둘 다 성공하거나 둘 다 롤백되게 함.
+    @Transactional
     @PostMapping("/create")
-    public ResponseEntity<Map<String, String>> submitOrder(@RequestBody Order order, @AuthenticationPrincipal CustomerDetails customerDetails) {
+    public ResponseEntity<Map<String, Object>> submitOrder(@RequestBody Order order, @AuthenticationPrincipal CustomerDetails customerDetails) {
         if (kisService.isBeforeOrderWindow()) {
             return ResponseEntity.badRequest().body(Map.of("message", "주문 접수는 오전 8시부터 가능합니다."));
         }
@@ -77,18 +78,6 @@ public class OrderController {
             }
         }
 
-        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String prefix = "ORD" + today;
-
-        String maxId = orderRepository.findMaxOrderIdByPrefix(prefix);
-        int seq = 1;
-        if (maxId != null) {
-            seq = Integer.parseInt(maxId.substring(maxId.length() - 4)) + 1;
-        }
-
-        String orderId = prefix + String.format("%04d", seq);
-
-        order.setOrderId(orderId);
         order.setMemberId(memberId);
         order.setOrderStatus(OrderStatus.PENDING);
         order.setCreatedAt(LocalDateTime.now());
@@ -96,10 +85,11 @@ public class OrderController {
         log.info("order status {} / order Type {}", order.getOrderStatus(), order.getOrderType());
 
         orderRepository.save(order);
+        matchingService.registerOrder(order); // 가격-시간 우선순위 호가창(OrderBook)에 등록 - O(log n)
         fraudDetectionService.checkOnSubmit(order);
         orderService.sendOrder(order);
 
-        return ResponseEntity.ok(Map.of("orderId",orderId));
+        return ResponseEntity.ok(Map.of("orderId", order.getOrderId()));
     }
 
     @GetMapping(value="/stream", produces= MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -229,10 +219,13 @@ public class OrderController {
         return ResponseEntity.ok(orderHistoryList);
     }
 
-    /* 대기 중(PENDING/PARTIAL)인 주문만 취소 가능. 이미 체결된 수량은 그대로 Trade에 남고, 남은 미체결분만 취소됨 */
+    /* 대기 중(PENDING/PARTIAL)인 주문만 취소 가능. 이미 체결된 수량은 그대로 Trade에 남고, 남은 미체결분만 취소됨
+       환급(memberRepository.save)과 주문 취소 상태 저장(orderRepository.save)을 트랜잭션으로 묶어서
+       중간에 실패해도 "환급만 되고 주문은 그대로" 같은 불일치가 안 남게 함 */
+    @Transactional
     @PostMapping("/{orderId}/cancel")
     public ResponseEntity<Map<String, String>> cancelOrder(@AuthenticationPrincipal CustomerDetails customerDetails,
-                                                             @PathVariable String orderId) {
+                                                             @PathVariable Long orderId) {
         if(customerDetails == null){
             return ResponseEntity.status(401).build();
         }

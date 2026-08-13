@@ -17,7 +17,7 @@ public class Trade {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long tradeId;
 
-    private String orderId;
+    private Long orderId;
 
     private String memberId;
 

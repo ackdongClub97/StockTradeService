@@ -1,9 +1,13 @@
 package stockOrder.stockTrade.matching;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import stockOrder.stockTrade.admin.AdminAlert;
@@ -25,7 +29,10 @@ import stockOrder.stockTrade.order.TradeRepository;
 import stockOrder.stockTrade.order.UnmatchReason;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 @Service
@@ -43,8 +50,37 @@ public class MatchingService {
     private final FraudDetectionService fraudDetectionService;
     private final Sinks.Many<Order> orderResultSink = Sinks.many().multicast().onBackpressureBuffer();
 
+    // cancelForMarketClose를 같은 클래스 안에서 직접 호출하면 @Transactional 프록시를 안 거쳐서 트랜잭션이 안 걸림 -
+    // KisService/KisWebSocketService 사이에 쓰던 것과 같은 @Autowired+@Lazy 자기주입 패턴으로 프록시를 통해 호출되게 함
+    @Autowired
+    @Lazy
+    private MatchingService self;
+
     /* 장마감 대기주문 일괄취소를 하루에 한 번만 실행하기 위한 플래그 - KisService.saveToday와 동일한 패턴 */
     private boolean marketCloseCancelDone = false;
+
+    /* 종목코드별 매수/매도 호가창(OrderBook) - 가격-시간 우선순위를 PriorityQueue로 유지한다.
+       DB(ORDER BY)에 매번 다시 정렬을 맡기지 않고, 삽입 시점(registerOrder)에 O(log n)으로 큐에 반영해둔다. */
+    private final Map<String, OrderBook> orderBooks = new ConcurrentHashMap<>();
+
+    /* 앱 재시작 시 메모리상의 OrderBook은 비어있으므로, DB에 남아있는 대기(PENDING/PARTIAL) 주문으로
+       다시 채워준다 - OrderBook은 DB 위에 얹은 성능 최적화 계층일 뿐, 진실의 원천은 항상 DB다. */
+    @PostConstruct
+    public void rebuildOrderBooksFromDb() {
+        List<Order> pending = orderRepository.findByOrderStatusIn(List.of(OrderStatus.PENDING, OrderStatus.PARTIAL));
+        pending.forEach(this::registerOrder);
+        log.info("[MatchingService] 재시작 - 대기 주문 {}건으로 호가창(OrderBook) 재구성", pending.size());
+    }
+
+    /* 새 주문이 생성되면(OrderController.submitOrder) 호출 - 해당 종목의 호가창에 매수/매도 큐로 등록한다. */
+    public void registerOrder(Order order) {
+        OrderBook orderBook = orderBooks.computeIfAbsent(order.getStockCode(), k -> new OrderBook());
+        if (order.getOrderType() == OrderType.BUY) {
+            orderBook.offerBuy(order.getOrderId(), order.getPrice(), order.getCreatedAt());
+        } else {
+            orderBook.offerSell(order.getOrderId(), order.getPrice(), order.getCreatedAt());
+        }
+    }
 
     @Scheduled(fixedRate = 30000, initialDelay = 5000)
     public void matching() {
@@ -99,7 +135,7 @@ public class MatchingService {
             log.info("[MatchingService] 장마감 - 대기 주문 {}건 취소 처리 시작", pendingOrders.size());
             pendingOrders.forEach(order -> {
                 try {
-                    cancelForMarketClose(order);
+                    self.cancelForMarketClose(order);
                 } catch (Exception e) {
                     log.error("[MatchingService] 장마감 취소 처리 실패 orderId={} : {}", order.getOrderId(), e.getMessage(), e);
                 }
@@ -109,8 +145,12 @@ public class MatchingService {
         marketCloseCancelDone = true;
     }
 
-    /* 매수 주문은 생성 시점에 전체 금액이 예약(차감)되어 있으므로, 미체결 잔량분만큼 환급 후 취소 처리 - OrderController.cancelOrder의 환급 로직과 동일 */
-    private void cancelForMarketClose(Order order) {
+    /* 매수 주문은 생성 시점에 전체 금액이 예약(차감)되어 있으므로, 미체결 잔량분만큼 환급 후 취소 처리 - OrderController.cancelOrder의 환급 로직과 동일.
+       환급(memberRepository.save)과 주문 취소 상태 저장(orderRepository.save)을 트랜잭션으로 묶어서, 중간에 실패해도
+       "환급만 되고 주문은 그대로(PENDING)" 상태가 안 남게 함 - 그런 상태로 남으면 다음날 재시도 때 중복 환급될 위험도 있었음.
+       protected인 이유: @Transactional이 걸리려면 프록시가 오버라이드할 수 있어야 하는데 private는 불가능(self 호출부 참고) */
+    @Transactional
+    protected void cancelForMarketClose(Order order) {
         if (order.getOrderType() == OrderType.BUY) {
             int remainingQty = order.getQuantity() - order.getMatchedQuantity();
             int refund = order.getPrice() * remainingQty;
@@ -150,18 +190,45 @@ public class MatchingService {
 
     /* 매수/매도 각각 같은 호가 스냅샷을 나눠 쓰므로, 같은 회차에서 여러 주문이 같은 물량을 중복으로 먹지 않도록
        레벨별 잔량을 로컬에서 차감해가며(BookLevels) 가격 우선 → 시간 우선(price priority → time priority) 순서로 소진시킨다.
-       (매수는 지정가가 높을수록, 매도는 지정가가 낮을수록 더 공격적인 주문이라 먼저 체결 기회를 준다 - findPendingBuyOrders/findPendingSellOrders 정렬 참고) */
+       (매수는 지정가가 높을수록, 매도는 지정가가 낮을수록 더 공격적인 주문이라 먼저 체결 기회를 준다)
+       우선순위 순서는 OrderBook(PriorityQueue)에서 꺼내서 결정한다 - DB ORDER BY 재정렬에 의존하지 않는다. */
     private void matchOrders(String pendingStockCode, AskingPriceDTO book) {
         BookLevels askLevels = new BookLevels(book.getAskPrices(), book.getAskVolumes());
         BookLevels bidLevels = new BookLevels(book.getBidPrices(), book.getBidVolumes());
 
-        List<OrderStatus> pendingStatuses = List.of(OrderStatus.PENDING, OrderStatus.PARTIAL);
+        OrderBook orderBook = orderBooks.computeIfAbsent(pendingStockCode, k -> new OrderBook());
 
-        List<Order> buyOrders = orderRepository.findPendingBuyOrders(pendingStockCode, pendingStatuses);
-        buyOrders.forEach(order -> execute(order, askLevels, true));
+        drainAndExecute(orderBook, true, askLevels);
+        drainAndExecute(orderBook, false, bidLevels);
+    }
 
-        List<Order> sellOrders = orderRepository.findPendingSellOrders(pendingStockCode, pendingStatuses);
-        sellOrders.forEach(order -> execute(order, bidLevels, false));
+    /* OrderBook에서 가격-시간 우선순위 순으로 하나씩 꺼내며(O(log n) per poll) 체결을 시도한다.
+       큐에는 정렬용 스냅샷(QueuedOrder)만 있으므로, 꺼낼 때마다 orderId로 최신 DB 상태를 다시 읽는다 -
+       이미 취소/체결된 주문은 이 시점에 상태로 걸러져 큐에서 자연히 제거된다(lazy deletion, PriorityQueue는
+       임의 원소를 O(log n)에 못 지우기 때문에 채택). 이번 회차에도 여전히 대기 중인 주문만 다음 회차를 위해
+       다시 큐에 넣는다. */
+    private void drainAndExecute(OrderBook orderBook, boolean isBuy, BookLevels levels) {
+        List<OrderBook.QueuedOrder> toRequeue = new ArrayList<>();
+        OrderBook.QueuedOrder queued;
+
+        while ((queued = isBuy ? orderBook.pollBuy() : orderBook.pollSell()) != null) {
+            Order order = orderRepository.findById(queued.orderId()).orElse(null);
+            if (order == null) continue; // 이론상 없어야 하지만 방어적으로 스킵
+            if (order.getOrderStatus() != OrderStatus.PENDING && order.getOrderStatus() != OrderStatus.PARTIAL) {
+                continue; // 이미 취소/체결 완료 - lazy deletion
+            }
+
+            execute(order, levels, isBuy);
+
+            if (order.getOrderStatus() == OrderStatus.PENDING || order.getOrderStatus() == OrderStatus.PARTIAL) {
+                toRequeue.add(queued); // 이번 회차에 다 못 채웠으면 다음 회차를 위해 유지
+            }
+        }
+
+        toRequeue.forEach(q -> {
+            if (isBuy) orderBook.requeueBuy(q);
+            else orderBook.requeueSell(q);
+        });
     }
 
     /* 호가 10단계 스냅샷 - 매칭 도중 소진된 잔량을 로컬에서 차감해가며 추적 */

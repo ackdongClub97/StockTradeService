@@ -1,0 +1,66 @@
+## 실행 정보
+- 일시: 2026-08-05 15:0x KST (장중)
+- 커맨드: k6 run loadtest/k6/main.js -e BASE_URL=http://localhost:8080 -e USER_COUNT=500
+- 스크립트 상태: 이 결과는 http_req_failed 원인 분석 이전(수정 전) 버전의 main.js로 실행한 결과.
+  이후 main.js에 expectedStatuses(200,400) 처리 + 시딩 수량 계산 수정을 반영함(test.md 참고).
+
+## THRESHOLDS
+
+    detail_duration
+    ✓ 'p(95)<500' p(95)=1.72ms
+
+    http_req_failed
+    ✗ 'rate<0.01' rate=4.12%
+
+    order_duration
+    ✓ 'p(95)<1500' p(95)=2.51ms
+
+    order_success_rate
+    ✓ 'rate>0.95' rate=99.94%
+
+    rank_duration
+    ✓ 'p(95)<500' p(95)=1.85ms
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 113051 198.172255/s
+    checks_succeeded...: 99.98% 113037 out of 113051
+    checks_failed......: 0.01%  14 out of 113051
+
+    (개별 로그인 체크 500 + 6건 전부 통과, 매도 체크만 99% — 3865/3879 성공, 14건 실패)
+
+    CUSTOM
+    detail_duration................: avg=946.42µs min=194µs med=825µs  max=37.84ms  p(90)=1.45ms p(95)=1.72ms
+    fds_triggering_orders_sent.....: 522    0.915038/s
+    order_duration.................: avg=1.52ms   min=346µs med=1.47ms max=131.25ms p(90)=2.23ms p(95)=2.51ms
+    order_success_rate.............: 99.94% 26183 out of 26197
+    rank_duration..................: avg=1.03ms   min=222µs med=908µs  max=44.09ms  p(90)=1.55ms p(95)=1.85ms
+
+    HTTP
+    http_req_duration..............: avg=1.75ms   min=173µs med=891µs  max=207.15ms p(90)=1.74ms p(95)=2.1ms
+      { expected_response:true }...: avg=1.8ms    min=173µs med=905µs  max=207.15ms p(90)=1.76ms p(95)=2.12ms
+    http_req_failed................: 4.12%  7506 out of 182091
+    http_reqs......................: 182091 319.195621/s
+
+    EXECUTION
+    iteration_duration.............: avg=2.02s    min=1s    med=2.01s  max=41.2s    p(90)=2.8s   p(95)=2.9s
+    iterations.....................: 112677 197.516653/s
+    vus............................: 3      min=0              max=506
+    vus_max........................: 506    min=506            max=506
+
+    NETWORK
+    data_received..................: 770 MB 1.4 MB/s
+    data_sent......................: 25 MB  44 kB/s
+
+running (9m30.5s), 000/506 VUs, 112677 complete and 0 interrupted iterations
+normal_users ✓ [======================================] 000/500 VUs  9m0s
+fds_abusers  ✓ [======================================] 6 VUs        6m0s
+ERRO[0570] thresholds on metrics 'http_req_failed' have been crossed
+
+## 원인 분석 (요약, 상세는 test.md 참고)
+1. FDS 빈도어뷰저가 반복적으로 계좌 시드머니를 소진시켜 400(잔고부족)이 뜨는데, 당시 스크립트엔 해당 요청에 check/expectedStatuses가 없어서 http_req_failed에 그대로 잡힘.
+2. setup()의 회원가입 batch도 체크가 없어서, 재실행 시 "이미 사용 중인 아이디" 400도 섞여 들어갈 수 있었음.
+3. (부수 발견) 시딩 매수 수량이 50주로 고정되어 있어 고가주가 뽑히면 시드머니(1천만원) 초과로 시딩 자체가 실패할 수 있는 버그.
+
+=> 이후 main.js에서 세 가지 모두 수정 완료(expectedStatuses(200,400) 처리 + seedQty 계산식 도입).

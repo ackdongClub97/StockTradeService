@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
@@ -71,6 +72,16 @@ public class KisController {
     @GetMapping("/stock-detail")
     public Mono<ResponseOutputDTO> getStockDetail(@PathVariable String code) {
         return kisService.getStockDetail(code);
+    }
+
+    /* 캐시된 단일 종목 스냅샷 즉시 반환 - getStockDetail과 달리 매 호출마다 실제 KIS REST를 타지 않는다.
+       고빈도 상세조회(부하테스트 등)는 이 엔드포인트를 써야 KIS 쪽에 레이트리밋/부하를 주지 않는다.
+       subscribe()가 최초 1회 웜업 조회로 캐시를 채우므로, 첫 호출 직후엔 204가 나올 수 있다. */
+    @GetMapping("/stock/{code}/cached")
+    public ResponseEntity<ResponseOutputDTO> getCachedStockDetail(@PathVariable String code) {
+        kisWebSocketService.subscribe(code);
+        ResponseOutputDTO cached = kisService.getCachedStockData(code);
+        return (cached != null) ? ResponseEntity.ok(cached) : ResponseEntity.noContent().build();
     }
 
     @GetMapping("/stock/{code}/stream")

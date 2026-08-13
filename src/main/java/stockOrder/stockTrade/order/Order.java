@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 @Table(name = "orders")
 public class Order {
     @Id
-    private String orderId; // ORD20260519001
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long orderId;
 
     private String memberId;
 

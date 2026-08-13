@@ -8,6 +8,19 @@ services:
     volumes:
       - loki-data:/loki
 
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: stocktrade-prometheus
+    ports:
+      - "9090:9090"
+    # k6의 experimental-prometheus-rw 출력이 여기로 remote_write를 쏜다 - 리시버는 기본 비활성이라 명시적으로 켜야 함
+    command:
+      - --web.enable-remote-write-receiver
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+
   grafana:
     image: grafana/grafana:10.4.3
     container_name: stocktrade-grafana
@@ -22,7 +35,9 @@ services:
       - grafana-data:/var/lib/grafana
     depends_on:
       - loki
+      - prometheus
 
 volumes:
   loki-data:
   grafana-data:
+  prometheus-data:

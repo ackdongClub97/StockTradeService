@@ -8,7 +8,7 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public interface OrderRepository extends JpaRepository<Order, String> {
+public interface OrderRepository extends JpaRepository<Order, Long> {
 
     /* 대기 종목 코드 목록 */
     @Query("SELECT DISTINCT o.stockCode FROM Order o WHERE o.orderStatus IN :orderStatus")
@@ -41,9 +41,6 @@ public interface OrderRepository extends JpaRepository<Order, String> {
     List<Order> findByMemberOrderHistory(
             @Param("memberId") String memberId
     );
-
-    @Query("SELECT MAX(o.orderId) FROM Order o WHERE o.orderId LIKE :prefix%")
-    String findMaxOrderIdByPrefix(@Param("prefix") String prefix);
 
     /* 관리자 화면: 아직 안 풀린(대기/부분체결) 주문 전체 - 왜 안 풀렸는지(lastUnmatchedReason) 확인용 */
     @Query("SELECT o FROM Order o WHERE o.orderStatus IN :orderStatus ORDER BY o.lastAttemptAt DESC NULLS LAST, o.createdAt DESC")

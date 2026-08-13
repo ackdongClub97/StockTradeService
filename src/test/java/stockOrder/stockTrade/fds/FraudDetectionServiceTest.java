@@ -52,7 +52,7 @@ class FraudDetectionServiceTest {
 
     private Order newOrder(OrderType type, PriceMode mode, int price) {
         Order order = new Order();
-        order.setOrderId("ORD-TEST-0001");
+        order.setOrderId(1L);
         order.setMemberId(MEMBER_ID);
         order.setStockCode(STOCK_CODE);
         order.setStockName("삼성전자");
