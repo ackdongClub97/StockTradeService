@@ -37,6 +37,8 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-kafka'
 	// Grafana Loki로 로그 직접 전송(로컬 테스트용) - Loki가 안 떠있어도 앱 구동엔 영향 없음(비동기 전송)
 	implementation 'com.github.loki4j:loki-logback-appender:1.5.2'
+	// logback-spring.xml의 <if>(LOKI_URL 미설정 시 Loki 어펜더 자체를 안 붙이는 조건부 설정)에 필요
+	runtimeOnly 'org.codehaus.janino:janino:3.1.12'
 	// Claude API - 뉴스 영향 분석
 	implementation 'com.anthropic:anthropic-java:2.34.0'
 	// Redis

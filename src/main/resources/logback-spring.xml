@@ -8,24 +8,36 @@
         </encoder>
     </appender>
 
-    <!-- 로컬 테스트용 Grafana Loki 전송 - loki.url을 환경변수로 안 주면 기본값(localhost)으로 시도만 하고,
-         Loki가 안 떠있어도 비동기라 앱 구동/요청 처리에 영향 없음 -->
-    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
-        <http>
-            <url>${LOKI_URL:-http://localhost:3100/loki/api/v1/push}</url>
-        </http>
-        <format>
-            <label>
-                <pattern>app=stocktrade,host=${HOSTNAME},level=%level</pattern>
-            </label>
-            <message>
-                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-            </message>
-        </format>
-    </appender>
+    <!-- LOKI_URL이 명시적으로 설정된 경우에만 Loki 어펜더를 붙인다.
+         이전엔 미설정 시 localhost로 기본값을 잡아서 "비동기라 영향 없다"고 가정했지만,
+         Loki가 실제로 없는 환경(EC2 등)에서는 전송 실패마다 재시도 로그(스택트레이스 포함)가
+         계속 쌓여서 디스크를 다 채우고 DB 파일 손상까지 유발한 전례가 있어(2026-08 이슈) 제거함. -->
+    <property name="LOKI_URL" value="${LOKI_URL:-}"/>
+
+    <if condition='!"".equals(property("LOKI_URL"))'>
+        <then>
+            <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+                <http>
+                    <url>${LOKI_URL}</url>
+                </http>
+                <format>
+                    <label>
+                        <pattern>app=stocktrade,host=${HOSTNAME},level=%level</pattern>
+                    </label>
+                    <message>
+                        <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+                    </message>
+                </format>
+            </appender>
+        </then>
+    </if>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="LOKI"/>
+        <if condition='!"".equals(property("LOKI_URL"))'>
+            <then>
+                <appender-ref ref="LOKI"/>
+            </then>
+        </if>
     </root>
 </configuration>
