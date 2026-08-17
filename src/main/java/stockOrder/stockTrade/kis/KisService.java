@@ -191,8 +191,9 @@ public class KisService {
 
     @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
     public void refreshRank() {
-        // 실제로 확인해보니 본장(정규장) 외 시간엔 KIS가 살아있는 랭킹 데이터를 안 줌 - 본장에만 실시간 호출하고
-        // 나머지 시간엔 저장해둔 마지막(종가) 데이터를 그대로 재전송한다.
+        // 본장(정규장) 외 시간에도 KIS는 그날 종가 기준 데이터를 정상적으로 내려준다(2026-08-17 재검증 - 기존 주석은
+        // 오판이었음). 다만 매 주기(30초)마다 다시 호출할 필요는 없으므로, 캐시가 이미 있으면 저장해둔 마지막 데이터를
+        // 그대로 재전송하고, 캐시가 비어있을 때만(재기동 직후 등) KIS를 한 번 직접 호출해 채운다(아래 else 분기).
         if(!isMarketOpen()) {
             // saveToday는 인메모리 플래그라 앱을 재기동하면 항상 false로 돌아온다 - 하루에 여러 번 재기동하면
             // (개발 중 흔한 상황) 재기동할 때마다 "오늘 아직 저장 안 함"으로 착각해서 같은 날짜 데이터를 중복
@@ -205,6 +206,18 @@ public class KisService {
             }
             if(!cachedData.isEmpty()) {
                 rankSink.tryEmitNext(List.copyOf(cachedData));
+            } else {
+                // DB에도 없고 캐시도 비어있는 경우(예: DB 초기화 직후 재기동) - 장마감 후라도 KIS는 그날
+                // 종가 기준 랭킹을 정상적으로 내려주는 것으로 실측 확인됨(2026-08-17). 다음 장이 열릴 때까지
+                // 화면을 계속 빈 채로 두지 않도록 여기서 한 번 직접 조회해서 캐시를 채운다. 채워지고 나면
+                // 다음 주기부터는 위 저장 가드가 정상적으로 DB에도 저장한다.
+                getVolumeRank("0").subscribe(
+                        list -> {
+                            cachedData.clear();
+                            cachedData.addAll(list);
+                            rankSink.tryEmitNext(List.copyOf(cachedData));
+                        }, err -> log.error("[refreshRank] 장마감 후 캐시 채우기용 조회 실패: {}", err.getMessage())
+                );
             }
             return;
         }
