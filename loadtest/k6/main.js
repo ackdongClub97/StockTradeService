@@ -4,6 +4,7 @@ import { Trend, Rate, Counter } from 'k6/metrics';
 import {
   BASE_URL, USER_COUNT, FDS_ABUSER_COUNT, USER_PREFIX, FDS_PREFIX,
   PASSWORD, SELLER_RATIO, STOCK_POOL_SIZE, WEIGHTS, READ_ONLY, READ_ONLY_WEIGHTS,
+  TRAFFIC_MULTIPLIER,
 } from './config.js';
 import { login } from './lib/auth.js';
 
@@ -84,6 +85,9 @@ export function setup() {
     console.log(`[setup] READ_ONLY 모드 - 일반 유저 ${USER_COUNT}명만 가입(FDS 어뷰저/보유수량 시딩 생략, 랭킹·상세조회만 부하테스트)`);
   } else {
     console.log(`[setup] 일반 유저 ${USER_COUNT}명 가입 (매도 시나리오용 시드 보유 ${sellerCount}명), FDS 어뷰저 ${FDS_ABUSER_COUNT}명 가입`);
+  }
+  if (TRAFFIC_MULTIPLIER !== 1) {
+    console.log(`[setup] TRAFFIC_MULTIPLIER=${TRAFFIC_MULTIPLIER} - VU ${USER_COUNT}명으로 약 ${USER_COUNT * TRAFFIC_MULTIPLIER}명급 요청 빈도를 재현 (think-time을 ${TRAFFIC_MULTIPLIER}배 압축)`);
   }
 
   const users = [];
@@ -206,7 +210,9 @@ export function normalUser(data) {
     doSell(data.stockPool, u.isSeller);
   }
 
-  sleep(1 + Math.random() * 2); // 1~3초 think-time - 실제 사용자 행동을 흉내
+  // 1~3초 think-time - 실제 사용자 행동을 흉내. TRAFFIC_MULTIPLIER(>1)만큼 나눠서, VU 수가
+  // 적어도(예: 500명) 그보다 많은 인원(예: 2000명)이 접속했을 때 나올 요청 빈도를 재현한다.
+  sleep((1 + Math.random() * 2) / TRAFFIC_MULTIPLIER);
 }
 
 function doRank() {

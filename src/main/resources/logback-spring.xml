@@ -8,6 +8,25 @@
         </encoder>
     </appender>
 
+    <!-- 배포 스크립트가 stdout을 파일로 리다이렉트(`> app.log`)하는 것과 별개로, 로그 자체를
+         여기서 크기 기준으로 로테이션한다 - 로테이션 없이 리다이렉트만 하면 트래픽이 몰릴 때
+         로그 파일이 무제한으로 불어나 디스크를 다 채우고, 그 여파로 Kafka가 크래시하거나 H2 DB
+         파일이 손상되는 사고가 반복됐음(2026-08 이슈, 부하테스트 1회로 app.log가 637MB까지 증가한
+         사례 포함). 총합 100MB를 넘지 않도록 캡을 걸어서, 트래픽이 아무리 몰려도 로그가 디스크를
+         다 채우는 일 자체가 구조적으로 불가능하게 만든다. -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE:-app.log}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_FILE:-app}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>20MB</maxFileSize>
+            <maxHistory>5</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
     <!-- LOKI_URL이 명시적으로 설정된 경우에만 Loki 어펜더를 붙인다.
          이전엔 미설정 시 localhost로 기본값을 잡아서 "비동기라 영향 없다"고 가정했지만,
          Loki가 실제로 없는 환경(EC2 등)에서는 전송 실패마다 재시도 로그(스택트레이스 포함)가
@@ -34,6 +53,7 @@
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
         <if condition='!"".equals(property("LOKI_URL"))'>
             <then>
                 <appender-ref ref="LOKI"/>

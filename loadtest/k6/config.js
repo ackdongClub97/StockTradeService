@@ -4,6 +4,14 @@ export const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 export const USER_COUNT = Number(__ENV.USER_COUNT || 500);        // 일반 유저 VU 수
 export const FDS_ABUSER_COUNT = Number(__ENV.FDS_ABUSER_COUNT || 6); // FDS 룰 검증 전용 VU 수
 
+// 실제 계정 수(USER_COUNT)는 적게 유지하면서, 그보다 많은 인원이 접속했을 때 나올 법한
+// 총 요청량(req/s)을 흉내내고 싶을 때 씀 - 예: 500명 계정으로 2000명급 트래픽을 내고 싶으면
+// TARGET_TRAFFIC=2000으로 설정. 각 VU의 think-time을 배수만큼 줄여서 요청 빈도를 높인다
+// (VU가 줄어든 만큼 한 명당 더 자주 요청 - 실제 유저 수는 적은데 특정 시간대에 주문이 몰리는
+// 상황을 재현하려는 목적, "대기자 화면 필요 여부" 판단용).
+export const TARGET_TRAFFIC = Number(__ENV.TARGET_TRAFFIC || USER_COUNT);
+export const TRAFFIC_MULTIPLIER = TARGET_TRAFFIC / USER_COUNT;
+
 export const USER_PREFIX = __ENV.USER_PREFIX || 'loadtest';
 export const FDS_PREFIX = __ENV.FDS_PREFIX || 'fdsabuser';
 export const PASSWORD = 'loadtest1234!';
