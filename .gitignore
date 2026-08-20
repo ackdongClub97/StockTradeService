@@ -42,4 +42,4 @@ out/
 ### secrets ###
 application-secret.yaml
 ### logs ###
-app.log
+app*.log*
