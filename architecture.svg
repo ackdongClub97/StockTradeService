@@ -227,14 +227,14 @@
   <rect x="60" y="750" width="14" height="14" fill="#fce4ec" stroke="#f48fb1" stroke-width="1.2" rx="2"/>
   <text x="80" y="762" font-size="10" fill="#333">주문 상태 머신</text>
 
-  <rect x="230" y="750" width="14" height="14" fill="#e8eaf6" stroke="#9fa8da" stroke-width="1.2" rx="2"/>
-  <text x="250" y="762" font-size="10" fill="#333">외부 API / DB</text>
+  <rect x="190" y="750" width="14" height="14" fill="#e8eaf6" stroke="#9fa8da" stroke-width="1.2" rx="2"/>
+  <text x="210" y="762" font-size="10" fill="#333">외부 API / DB</text>
 
-  <rect x="390" y="750" width="14" height="14" fill="#eceff1" stroke="#90a4ae" stroke-width="1.2" rx="2"/>
-  <text x="410" y="762" font-size="10" fill="#333">관측 / 운영</text>
+  <rect x="350" y="750" width="14" height="14" fill="#eceff1" stroke="#90a4ae" stroke-width="1.2" rx="2"/>
+  <text x="370" y="762" font-size="10" fill="#333">관측 / 운영</text>
 
-  <rect x="540" y="750" width="14" height="14" fill="#fbe9e7" stroke="#ff7043" stroke-width="1.5" rx="2"/>
-  <text x="560" y="762" font-size="10" fill="#333">AWS / 인프라</text>
+  <rect x="500" y="750" width="14" height="14" fill="#fbe9e7" stroke="#ff7043" stroke-width="1.5" rx="2"/>
+  <text x="520" y="762" font-size="10" fill="#333">AWS / 인프라</text>
 
   <!-- 핵심 포인트 -->
   <text x="50" y="792" font-size="10" fill="#555">💡 핵심 포인트:</text>
