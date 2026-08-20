@@ -233,7 +233,7 @@
   <rect x="390" y="750" width="14" height="14" fill="#eceff1" stroke="#90a4ae" stroke-width="1.2" rx="2"/>
   <text x="410" y="762" font-size="10" fill="#333">관측 / 운영</text>
 
-  <rect x="540" y="750" width="14" height="14" fill="#fff3e0" stroke="#ffb74d" stroke-width="1.5" rx="2"/>
+  <rect x="540" y="750" width="14" height="14" fill="#fbe9e7" stroke="#ff7043" stroke-width="1.5" rx="2"/>
   <text x="560" y="762" font-size="10" fill="#333">AWS / 인프라</text>
 
   <!-- 핵심 포인트 -->
