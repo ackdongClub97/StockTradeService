@@ -63,6 +63,38 @@ public class MatchingService {
        DB(ORDER BY)에 매번 다시 정렬을 맡기지 않고, 삽입 시점(registerOrder)에 O(log n)으로 큐에 반영해둔다. */
     private final Map<String, OrderBook> orderBooks = new ConcurrentHashMap<>();
 
+    /* KIS 호가 캐시(cachedAskingPrice)는 이 앱이 주문을 체결시킨다고 줄어들지 않는다 - 실시간 웹소켓
+       틱이 새로 올 때만 갱신되는 "외부 시세" 스냅샷이기 때문. 그래서 종목코드별로 "마지막으로 본
+       스냅샷(AskingPriceDTO 객체 identity로 판별) + 그 스냅샷 기준 로컬 잔량"을 들고 있다가, 새 틱이
+       오기 전까지는 즉시체결(tryMatch)이든 배치(matchOrders)든 같은 잔량을 이어서 소진시킨다 -
+       그러지 않으면 같은 틱 사이에 여러 주문이 각자 "화면에 5주 있네" 하고 5주씩 중복으로 체결시킬 수
+       있다. 새 틱이 오면(book 참조가 달라지면) 그 시점에만 잔량을 원본 값으로 리셋한다.
+       stateFor()가 반환하는 ConsumptionState 인스턴스 자체를 락으로도 겸용해서, 같은 종목에 대한
+       tryMatch/matchOrders 호출이 이 잔량을 동시에 읽고 쓰다가 깨지는 일도 함께 막는다. */
+    private static class ConsumptionState {
+        private AskingPriceDTO lastBook;
+        private BookLevels askLevels;
+        private BookLevels bidLevels;
+    }
+
+    private final Map<String, ConsumptionState> consumptionByStock = new ConcurrentHashMap<>();
+
+    private ConsumptionState stateFor(String stockCode) {
+        return consumptionByStock.computeIfAbsent(stockCode, k -> new ConsumptionState());
+    }
+
+    /* state.lastBook과 이번에 받은 book이 같은 객체면(=새 틱이 아직 안 옴) 지난번에 소진하던 잔량을
+       그대로 이어서 반환하고, 다르면(=새 틱 도착) 원본 값으로 리셋한 뒤 반환한다.
+       호출하는 쪽에서 반드시 synchronized(state)로 감싸고 호출해야 한다. */
+    private BookLevels levelsFor(ConsumptionState state, AskingPriceDTO book, boolean isBuy) {
+        if (state.lastBook != book) {
+            state.lastBook = book;
+            state.askLevels = new BookLevels(book.getAskPrices(), book.getAskVolumes());
+            state.bidLevels = new BookLevels(book.getBidPrices(), book.getBidVolumes());
+        }
+        return isBuy ? state.askLevels : state.bidLevels;
+    }
+
     /* 앱 재시작 시 메모리상의 OrderBook은 비어있으므로, DB에 남아있는 대기(PENDING/PARTIAL) 주문으로
        다시 채워준다 - OrderBook은 DB 위에 얹은 성능 최적화 계층일 뿐, 진실의 원천은 항상 DB다. */
     @PostConstruct
@@ -188,18 +220,23 @@ public class MatchingService {
         }
     }
 
-    /* 매수/매도 각각 같은 호가 스냅샷을 나눠 쓰므로, 같은 회차에서 여러 주문이 같은 물량을 중복으로 먹지 않도록
-       레벨별 잔량을 로컬에서 차감해가며(BookLevels) 가격 우선 → 시간 우선(price priority → time priority) 순서로 소진시킨다.
+    /* 매수/매도 각각 같은 호가 스냅샷을 나눠 쓰므로, 같은 틱 동안 여러 주문(이 배치 회차뿐 아니라
+       즉시체결 tryMatch까지 포함)이 같은 물량을 중복으로 먹지 않도록 레벨별 잔량을 로컬에서
+       차감해가며(BookLevels, levelsFor로 종목별 상태 공유) 가격 우선 → 시간 우선(price priority →
+       time priority) 순서로 소진시킨다.
        (매수는 지정가가 높을수록, 매도는 지정가가 낮을수록 더 공격적인 주문이라 먼저 체결 기회를 준다)
        우선순위 순서는 OrderBook(PriorityQueue)에서 꺼내서 결정한다 - DB ORDER BY 재정렬에 의존하지 않는다. */
     private void matchOrders(String pendingStockCode, AskingPriceDTO book) {
-        BookLevels askLevels = new BookLevels(book.getAskPrices(), book.getAskVolumes());
-        BookLevels bidLevels = new BookLevels(book.getBidPrices(), book.getBidVolumes());
+        ConsumptionState state = stateFor(pendingStockCode);
+        synchronized (state) {
+            BookLevels askLevels = levelsFor(state, book, true);
+            BookLevels bidLevels = levelsFor(state, book, false);
 
-        OrderBook orderBook = orderBooks.computeIfAbsent(pendingStockCode, k -> new OrderBook());
+            OrderBook orderBook = orderBooks.computeIfAbsent(pendingStockCode, k -> new OrderBook());
 
-        drainAndExecute(orderBook, true, askLevels);
-        drainAndExecute(orderBook, false, bidLevels);
+            drainAndExecute(orderBook, true, askLevels);
+            drainAndExecute(orderBook, false, bidLevels);
+        }
     }
 
     /* OrderBook에서 가격-시간 우선순위 순으로 하나씩 꺼내며(O(log n) per poll) 체결을 시도한다.
@@ -418,20 +455,21 @@ public class MatchingService {
             return;
         }
 
-        AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(orderData.getStockCode());
-        if (book == null) {
-            log.info("[tryMatch] {} {} 호가 데이터 아직 없음 - 다음 배치에서 재시도", orderData.getOrderId(), orderData.getStockCode());
-            orderData.setLastUnmatchedReason(UnmatchReason.NO_ORDERBOOK_DATA);
-            orderData.setLastAttemptAt(LocalDateTime.now());
-            orderRepository.save(orderData);
-            return;
+        ConsumptionState state = stateFor(orderData.getStockCode());
+        synchronized (state) {
+            AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(orderData.getStockCode());
+            if (book == null) {
+                log.info("[tryMatch] {} {} 호가 데이터 아직 없음 - 다음 배치에서 재시도", orderData.getOrderId(), orderData.getStockCode());
+                orderData.setLastUnmatchedReason(UnmatchReason.NO_ORDERBOOK_DATA);
+                orderData.setLastAttemptAt(LocalDateTime.now());
+                orderRepository.save(orderData);
+                return;
+            }
+
+            boolean isBuy = orderData.getOrderType() == OrderType.BUY;
+            BookLevels levels = levelsFor(state, book, isBuy);
+
+            execute(orderData, levels, isBuy);
         }
-
-        boolean isBuy = orderData.getOrderType() == OrderType.BUY;
-        BookLevels levels = isBuy
-                ? new BookLevels(book.getAskPrices(), book.getAskVolumes())
-                : new BookLevels(book.getBidPrices(), book.getBidVolumes());
-
-        execute(orderData, levels, isBuy);
     }
 }

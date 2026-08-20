@@ -25,11 +25,17 @@ import stockOrder.stockTrade.order.Trade;
 import stockOrder.stockTrade.order.TradeRepository;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -257,5 +263,87 @@ class MatchingServiceTest {
         assertEquals(5, highPriceOrder.getMatchedQuantity(), "지정가가 더 높은(더 공격적인) 주문이 먼저 물량 5주를 가져가야 한다");
         assertEquals(0, lowPriceOrder.getMatchedQuantity(), "지정가가 낮은 주문은 이번 회차 물량이 이미 소진돼서 체결되면 안 된다");
         assertEquals(OrderStatus.PENDING, lowPriceOrder.getOrderStatus(), "체결 못 한 주문은 그대로 PENDING이어야 한다");
+    }
+
+    @Test
+    @DisplayName("6. 같은 호가 틱 공유 - 즉시체결(tryMatch) 두 건이 같은 호가 스냅샷을 연달아 보면, 두 번째 건은 첫 번째가 소진한 잔량을 다시 못 먹는다")
+    void 같은_호가_스냅샷을_보는_두_번의_즉시체결은_잔량을_나눠쓴다() {
+        // 매도호가 잔량 5주뿐인 "한 장의 스냅샷"(같은 AskingPriceDTO 객체)을 두 주문이 순서대로 조회
+        AskingPriceDTO sameTick = askingPriceWith("49000", "5");
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(sameTick);
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        Order first = newBuyOrder(10, 50_000);
+        first.setOrderId(1L);
+        Order second = newBuyOrder(10, 50_000);
+        second.setOrderId(2L);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(first));
+        when(orderRepository.findById(2L)).thenReturn(Optional.of(second));
+
+        matchingService.tryMatch(first);
+        assertEquals(5, first.getMatchedQuantity(), "먼저 온 주문이 스냅샷에 표시된 물량(5주)을 전부 가져간다");
+
+        matchingService.tryMatch(second);
+        assertEquals(0, second.getMatchedQuantity(),
+                "같은 틱(같은 스냅샷)에는 더 이상 잔량이 없으므로, 화면에 보였던 5주를 두 번째 주문이 중복으로 체결시키면 안 된다");
+        assertEquals(OrderStatus.PENDING, second.getOrderStatus());
+
+        // 새 웹소켓 틱이 도착(값은 같아도 KisWebSocketService가 매번 새 객체를 만들어 캐시에 넣음)하면 잔량이 리셋된다
+        AskingPriceDTO nextTick = askingPriceWith("49000", "5");
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(nextTick);
+
+        matchingService.tryMatch(second);
+        assertEquals(5, second.getMatchedQuantity(), "새 틱이 오면 그 틱 기준으로 다시 5주만큼 체결 가능해야 한다");
+    }
+
+    @Test
+    @DisplayName("7. 동시성 - 같은 종목에 여러 사용자가 동시에 즉시체결을 시도해도, 그 순간 호가 틱의 잔량을 넘어서 체결되지 않는다")
+    void 여러_사용자가_동시에_같은_종목을_체결_시도해도_한_틱의_호가_잔량을_넘지_않는다() throws InterruptedException {
+        int userCount = 5;
+        int askVolume = 5; // 5명이 각 10주씩 원해도, 이 틱에 실제로 나갈 수 있는 물량은 5주뿐
+        AskingPriceDTO sharedTick = askingPriceWith("49000", String.valueOf(askVolume)); // 5명 모두 같은 스냅샷(같은 객체)을 봄
+
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(sharedTick);
+        when(memberRepository.findByMemberId(any())).thenAnswer(inv -> Optional.of(newMember()));
+
+        List<Order> orders = new ArrayList<>();
+        for (int i = 1; i <= userCount; i++) {
+            Order order = newBuyOrder(10, 50_000);
+            order.setOrderId((long) i);
+            order.setMemberId("member" + i);
+            orders.add(order);
+            when(orderRepository.findById((long) i)).thenReturn(Optional.of(order));
+        }
+
+        ExecutorService pool = Executors.newFixedThreadPool(userCount);
+        CountDownLatch ready = new CountDownLatch(userCount);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(userCount);
+
+        for (Order order : orders) {
+            pool.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await();
+                    matchingService.tryMatch(order);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+
+        ready.await();
+        start.countDown(); // 5개 스레드가 최대한 같은 순간에 tryMatch를 호출하도록 동시에 풀어줌
+        assertTrue(done.await(10, TimeUnit.SECONDS), "5개 체결 시도가 제한시간 안에 끝나야 한다");
+        pool.shutdown();
+
+        int totalFilled = orders.stream().mapToInt(Order::getMatchedQuantity).sum();
+        assertEquals(askVolume, totalFilled,
+                "5명이 동시에 주문해도, 그 순간 호가 스냅샷에 표시된 물량(5주)을 넘어서 체결되면 안 된다");
+
+        long winners = orders.stream().filter(o -> o.getMatchedQuantity() > 0).count();
+        assertEquals(1, winners, "잔량 5주는 한 번에 소진되므로, 동시에 시도한 5명 중 정확히 한 명만 체결됐어야 한다");
     }
 }
