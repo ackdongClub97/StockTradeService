@@ -346,4 +346,40 @@ class MatchingServiceTest {
         long winners = orders.stream().filter(o -> o.getMatchedQuantity() > 0).count();
         assertEquals(1, winners, "잔량 5주는 한 번에 소진되므로, 동시에 시도한 5명 중 정확히 한 명만 체결됐어야 한다");
     }
+
+    @Test
+    @DisplayName("8. 취소 반영 - OrderBook에 등록된 후 배치가 실제로 꺼내 처리하기 직전에 취소된 주문은 체결되지 않고 건너뛴다")
+    void 배치가_큐에서_꺼내기_직전에_취소된_주문은_체결되지_않는다() {
+        // 지정가 50,000원(우선순위 높음, 먼저 poll됨) - 큐에 등록된 뒤 배치가 처리하기 직전에 취소됨
+        Order cancelledOrder = newBuyOrder(10, 50_000);
+        cancelledOrder.setOrderId(1L);
+        // 지정가 49,000원(우선순위 낮음, 나중에 poll됨) - 끝까지 대기 상태 유지, 정상 체결돼야 함
+        Order stillPendingOrder = newBuyOrder(10, 49_000);
+        stillPendingOrder.setOrderId(2L);
+
+        matchingService.registerOrder(cancelledOrder);
+        matchingService.registerOrder(stillPendingOrder);
+
+        // OrderBook에는 "PENDING이었던 시점의 스냅샷(가격/시각)"만 남아있고, 실제 체결 시도 시점엔
+        // orderId로 DB 최신 상태를 다시 조회한다(drainAndExecute) - 그 사이에 사용자가 취소했다고 가정.
+        cancelledOrder.setOrderStatus(OrderStatus.CANCELLED);
+
+        when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(cancelledOrder));
+        when(orderRepository.findById(2L)).thenReturn(Optional.of(stillPendingOrder));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+        // 두 주문 다 체결 자격이 있는 호가(물량도 충분) - 취소되지 않았다면 cancelledOrder도 체결됐을 상황
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWith("49000", "20"));
+
+        matchingService.matching();
+
+        assertEquals(0, cancelledOrder.getMatchedQuantity(), "이미 취소된 주문은 체결 시도 자체가 안 되어 체결수량이 0으로 남아야 한다");
+        assertEquals(OrderStatus.CANCELLED, cancelledOrder.getOrderStatus(), "취소 상태가 그대로 유지돼야 한다(되살아나면 안 됨)");
+
+        assertEquals(10, stillPendingOrder.getMatchedQuantity(), "취소된 주문(더 높은 우선순위)을 건너뛰어도, 대기 중인 다음 주문은 정상 체결돼야 한다");
+        assertEquals(OrderStatus.MATCHED, stillPendingOrder.getOrderStatus());
+
+        verify(tradeRepository, times(1)).save(any(Trade.class)); // 체결은 취소되지 않은 주문 1건만 발생
+    }
 }
