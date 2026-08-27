@@ -279,6 +279,16 @@ VU 1개, 동시성 0인 상태(`per-vu-iterations` executor, 순수 순차 실�
 - `loadtest/k6/main.js`: VU 모듈 스코프 변수(`sessionCookie`)에 로그인 시 쿠키를 저장해두고, `submitOrder()`/`getCachedPrice()`를 포함한 모든 요청이 이 값을 `Cookie` 헤더로 직접 붙이도록 변경 (k6의 자동 쿠키 저장소에 의존하지 않음). `submitOrder()`에는 `redirects: 0`도 추가해서 앞으로 비슷한 문제가 재발해도 리다이렉트가 "성공"으로 마스킹되지 않고 바로 드러나게 함.
 - 검증 중 발견한 부수 문제: `loadtest/k6/main.js`의 `phoneFor()`가 `USER_PREFIX`를 반영하지 않고 순번만으로 전화번호를 생성해서, 이전 실행에서 만든 계정들과 신규 프리픽스 계정의 전화번호가 충돌해 회원가입이 실패할 수 있음(이번 조사 중 실제로 발생) — 아직 수정 안 함, 별도 이슈로 남겨둠.
 
+### 후속 개선 - 수동 Cookie 헤더 방식을 k6 내장 설정으로 단순화 (2026-08-25)
+
+위 수정(로그인 시 받은 JSESSIONID를 변수에 저장해뒀다가 매 요청마다 `Cookie` 헤더로 직접 붙이는 방식)은 실제로 작동은 했지만, 사용자가 "k6 자체에 이걸 설정으로 끌 수 있는 옵션이 있지 않냐"고 직접 찾아내면서 재검토함. k6 공식 문서 확인 결과 `options.noCookiesReset`(기본값 `false`)이 정확히 이 문제를 위한 내장 옵션이었음 - `true`로 켜면 k6의 자동 쿠키 저장소가 VU의 iteration이 바뀌어도 초기화되지 않고 세션을 그대로 유지함.
+
+**실측 검증**: 수동 헤더 로직을 전부 제거하고 `noCookiesReset: true`만 켠 최소 스크립트로 5회 순차 반복 테스트 → 전부 정상 인증 유지(200, 302 없음) 확인.
+
+**코드 반영**: `loadtest/k6/main.js`/`lib/auth.js`에서 `sessionCookie` 모듈 변수, `submitOrder()`의 `cookie` 파라미터/`Cookie` 헤더 조립 로직을 전부 제거하고 `options.noCookiesReset: true` 한 줄로 대체. `login()`은 더 이상 쿠키 값을 리턴할 필요가 없어져 성공 여부(boolean)만 리턴하도록 단순화. 20명 규모 스모크 테스트로 전체 스크립트가 여전히 정상 동작함을 재확인(`http_req_failed 0%`, `order_success_rate 98.14%`).
+
+**교훈**: 원인 진단(k6가 iteration마다 쿠키를 지운다)은 처음부터 정확했지만, "이걸 고칠 수 있는 내장 설정이 있는지"는 당시 확인 안 하고 바로 코드 레벨 우회로 넘어갔었음 - 외부 도구의 동작을 코드로 우회하기 전에 먼저 공식 문서에 관련 설정이 없는지부터 확인하는 습관이 필요함(`CLAUDE.md`의 "Operational rules"에 이 교훈을 별도로 기록해둠).
+
 ### 검증 결과
 
 1. **500명, 축소 스모크 테스트(1 VU 순차/동시성 0 포함)** — 세션이 반복 전체에 걸쳐 정상 유지됨, `checks_succeeded 100%`.

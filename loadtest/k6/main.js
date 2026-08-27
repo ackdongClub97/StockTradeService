@@ -14,15 +14,12 @@ const orderDuration = new Trend('order_duration', true);
 const orderSuccessRate = new Rate('order_success_rate');
 const fdsOrdersSent = new Counter('fds_triggering_orders_sent');
 
-// VU(iteration 0)가 로그인해서 받은 JSESSIONID를 담아두는 모듈 스코프 변수.
-// k6는 iteration 사이에 자동 쿠키 저장소를 비우므로(auth.js 주석 참고), 이 값을 직접
-// Cookie 헤더로 매 요청에 붙여야 세션이 유지된다. 모듈 top-level 변수는 VU마다 독립된
-// JS 실행 컨텍스트를 가지므로 다른 VU와 섞이지 않는다.
-let sessionCookie = null;
-
 // READ_ONLY(장 마감 후 등 실제 체결 검증이 무의미한 시간대)일 땐 주문을 아예 안 내므로
 // FDS 어뷰저 시나리오(전부 주문 기반)와 주문 관련 임계치를 통째로 뺀다.
 export const options = {
+  // k6는 기본적으로 VU가 iteration을 새로 시작할 때마다 쿠키 저장소를 초기화한다 - 이 설정을
+  // 켜서 로그인 세션(JSESSIONID)이 iteration 사이에도 유지되게 한다(auth.js 주석/issue.md 참고).
+  noCookiesReset: true,
   scenarios: READ_ONLY ? {
     // 상황1(읽기 전용) - 랭킹 조회 / 상세 조회만
     normal_users: {
@@ -136,7 +133,7 @@ export function setup() {
   console.log(`[setup] 보유수량 시딩 대상 ${seedTargets.length}명 (종목 ${stockPool[0].code}, 1인당 ${seedQty}주)`);
   let seeded = 0;
   seedTargets.forEach((t) => {
-    const cookie = login(t.memberId, PASSWORD);
+    login(t.memberId, PASSWORD);
     const res = submitOrder({
       stockCode: stockPool[0].code,
       stockName: stockPool[0].name,
@@ -144,7 +141,7 @@ export function setup() {
       priceMode: 'MARKET',
       price: stockPool[0].price,
       quantity: seedQty,
-    }, cookie);
+    });
     if (res.status === 200) seeded++;
   });
   sleep(3); // Kafka 컨슈머 + tryMatch가 처리될 시간을 한 번에 벌어준다
@@ -187,7 +184,7 @@ function fetchStockPool() {
 /* ---------------- 상황1: 일반 유저 500명 ---------------- */
 export function normalUser(data) {
   const u = data.users[(__VU - 1) % data.users.length];
-  if (__ITER === 0) sessionCookie = login(u.memberId, PASSWORD);
+  if (__ITER === 0) login(u.memberId, PASSWORD);
 
   const r = Math.random();
   let acc = 0;
@@ -249,7 +246,7 @@ function doBuy(stockPool, priceMode) {
     priceMode,
     price: orderPrice,
     quantity: 1 + Math.floor(Math.random() * 5),
-  }, sessionCookie, { action: `buy_${priceMode.toLowerCase()}` }, [200, 400]);
+  }, { action: `buy_${priceMode.toLowerCase()}` }, [200, 400]);
 
   orderDuration.add(res.timings.duration);
   const ok = res.status === 200;
@@ -271,7 +268,7 @@ function doSell(stockPool, isSeller) {
       priceMode: Math.random() < 0.5 ? 'MARKET' : 'LIMIT',
       price,
       quantity: 1 + Math.floor(Math.random() * 3),
-    }, sessionCookie, { action: 'sell' }, [200, 400]);
+    }, { action: 'sell' }, [200, 400]);
     orderDuration.add(res.timings.duration);
     const ok = res.status === 200;
     orderSuccessRate.add(ok);
@@ -286,7 +283,7 @@ function doSell(stockPool, isSeller) {
       priceMode: 'MARKET',
       price,
       quantity: 1,
-    }, sessionCookie, { action: 'sell_reject' }, [200, 400]);
+    }, { action: 'sell_reject' }, [200, 400]);
     check(res, { '보유수량 부족 시 400/200 (5xx 아님)': (r) => r.status === 200 || r.status === 400 });
   }
 }
@@ -294,7 +291,7 @@ function doSell(stockPool, isSeller) {
 /* ---------------- 상황3: FDS 어뷰저 ---------------- */
 export function fdsAbuser(data) {
   const a = data.abusers[(__VU - 1) % data.abusers.length];
-  if (__ITER === 0) sessionCookie = login(a.memberId, PASSWORD);
+  if (__ITER === 0) login(a.memberId, PASSWORD);
 
   const mode = __VU % 3;
   if (mode === 0) abuseFrequency(data.stockPool);
@@ -313,7 +310,7 @@ function abuseFrequency(stockPool) {
       stockCode: stock.code, stockName: stock.name,
       orderType: 'BUY', priceMode: 'MARKET', price: getCachedPrice(stock.code) || stock.price,
       quantity: 1,
-    }, sessionCookie, { action: 'fds_frequency' }, [200, 400]);
+    }, { action: 'fds_frequency' }, [200, 400]);
     check(res, { 'FDS 빈도어뷰저 주문 200/400': (r) => r.status === 200 || r.status === 400 });
     fdsOrdersSent.add(1, { rule: 'frequency' });
     sleep(3);
@@ -328,7 +325,7 @@ function abusePriceOutlier(stockPool) {
     stockCode: stock.code, stockName: stock.name,
     orderType: 'BUY', priceMode: 'LIMIT', price: roundTick(price * 0.7),
     quantity: 1,
-  }, sessionCookie, { action: 'fds_price_outlier' }, [200, 400]);
+  }, { action: 'fds_price_outlier' }, [200, 400]);
   check(res, { 'FDS 가격이상치어뷰저 주문 200/400': (r) => r.status === 200 || r.status === 400 });
   fdsOrdersSent.add(1, { rule: 'price_outlier' });
 }
@@ -342,7 +339,7 @@ function abuseRoundTrip(stockPool) {
   const sellRes = submitOrder({
     stockCode: stock.code, stockName: stock.name,
     orderType: 'SELL', priceMode: 'MARKET', price, quantity: 1,
-  }, sessionCookie, { action: 'fds_roundtrip' }, [200, 400]);
+  }, { action: 'fds_roundtrip' }, [200, 400]);
   check(sellRes, { 'FDS 왕복매매어뷰저 매도 200/400': (r) => r.status === 200 || r.status === 400 });
   fdsOrdersSent.add(1, { rule: 'round_trip' });
 
@@ -351,7 +348,7 @@ function abuseRoundTrip(stockPool) {
   const buyRes = submitOrder({
     stockCode: stock.code, stockName: stock.name,
     orderType: 'BUY', priceMode: 'MARKET', price, quantity: 1,
-  }, sessionCookie, { action: 'fds_roundtrip' }, [200, 400]);
+  }, { action: 'fds_roundtrip' }, [200, 400]);
   check(buyRes, { 'FDS 왕복매매어뷰저 매수 200/400': (r) => r.status === 200 || r.status === 400 });
   fdsOrdersSent.add(1, { rule: 'round_trip' });
 }
@@ -374,16 +371,12 @@ function roundTick(price) {
   return Math.max(1, Math.round(price / 10) * 10);
 }
 
-// cookie는 auth.js의 login()이 리턴한 JSESSIONID 값(VU 모듈 스코프의 sessionCookie).
-// k6의 자동 쿠키 저장소는 iteration이 바뀌면 세션 쿠키를 비우므로 여기서 매번 직접 붙인다(issue.md 참고).
-// redirects: 0으로 자동 추적을 꺼서, 세션이 깨졌을 때 나오는 302가 조용히 200(로그인 페이지)으로
-// 마스킹되지 않고 원래 상태코드 그대로 드러나게 한다.
-function submitOrder(order, cookie, tags, expectedStatuses) {
+// 인증은 options.noCookiesReset(k6 쿠키 저장소가 iteration 간에도 세션을 유지)에 맡기고,
+// 여기서는 쿠키를 따로 안 다룬다. redirects: 0으로 자동 추적을 꺼서, 세션이 깨졌을 때 나오는
+// 302가 조용히 200(로그인 페이지)으로 마스킹되지 않고 원래 상태코드 그대로 드러나게 한다.
+function submitOrder(order, tags, expectedStatuses) {
   const params = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: `JSESSIONID=${cookie}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
     tags: tags || {},
     redirects: 0,
   };
