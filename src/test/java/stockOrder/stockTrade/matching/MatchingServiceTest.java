@@ -251,8 +251,7 @@ class MatchingServiceTest {
         matchingService.registerOrder(highPriceOrder);
 
         when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(lowPriceOrder));
-        when(orderRepository.findById(2L)).thenReturn(Optional.of(highPriceOrder));
+        when(orderRepository.findAllById(any())).thenReturn(List.of(lowPriceOrder, highPriceOrder));
         when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
         // 매도호가 물량이 5주뿐이라 두 주문(각 10주)이 경쟁하는 상황 - 둘 다 이 가격대엔 체결 자격이 있음(5% 밴드 안)
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
@@ -365,8 +364,7 @@ class MatchingServiceTest {
         cancelledOrder.setOrderStatus(OrderStatus.CANCELLED);
 
         when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(cancelledOrder));
-        when(orderRepository.findById(2L)).thenReturn(Optional.of(stillPendingOrder));
+        when(orderRepository.findAllById(any())).thenReturn(List.of(cancelledOrder, stillPendingOrder));
         when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
         // 두 주문 다 체결 자격이 있는 호가(물량도 충분) - 취소되지 않았다면 cancelledOrder도 체결됐을 상황
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))

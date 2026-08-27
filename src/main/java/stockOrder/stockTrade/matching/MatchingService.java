@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 
 @Service
@@ -239,17 +240,29 @@ public class MatchingService {
         }
     }
 
-    /* OrderBook에서 가격-시간 우선순위 순으로 하나씩 꺼내며(O(log n) per poll) 체결을 시도한다.
-       큐에는 정렬용 스냅샷(QueuedOrder)만 있으므로, 꺼낼 때마다 orderId로 최신 DB 상태를 다시 읽는다 -
-       이미 취소/체결된 주문은 이 시점에 상태로 걸러져 큐에서 자연히 제거된다(lazy deletion, PriorityQueue는
-       임의 원소를 O(log n)에 못 지우기 때문에 채택). 이번 회차에도 여전히 대기 중인 주문만 다음 회차를 위해
-       다시 큐에 넣는다. */
+    /* OrderBook에서 가격-시간 우선순위 순으로 전부 꺼낸 뒤(O(log n) per poll), 최신 DB 상태를
+       findAllById로 한 번에 배치 조회한다 - 예전엔 꺼낼 때마다 findById를 개별 호출해서 대기 주문
+       N건이면 DB 왕복이 N번이었음(2026-08-25 JFR 프로파일링으로 H2 MVStore 조회 비용이 CPU 상위권을
+       차지하는 걸 확인, docs/matching-engine-heap-refactor.md에도 같은 N+1 패턴이 기록돼 있었음).
+       배치 조회로 왕복을 1번으로 줄이되, 체결 순서 자체는 원래 우선순위 큐에서 꺼낸 순서를 그대로 써서
+       가격-시간 우선순위가 깨지지 않게 한다. 이미 취소/체결된 주문은 이 시점에 상태로 걸러져 큐에서
+       자연히 제거된다(lazy deletion, PriorityQueue는 임의 원소를 O(log n)에 못 지우기 때문에 채택).
+       이번 회차에도 여전히 대기 중인 주문만 다음 회차를 위해 다시 큐에 넣는다. */
     private void drainAndExecute(OrderBook orderBook, boolean isBuy, BookLevels levels) {
-        List<OrderBook.QueuedOrder> toRequeue = new ArrayList<>();
+        List<OrderBook.QueuedOrder> queuedOrders = new ArrayList<>();
         OrderBook.QueuedOrder queued;
-
         while ((queued = isBuy ? orderBook.pollBuy() : orderBook.pollSell()) != null) {
-            Order order = orderRepository.findById(queued.orderId()).orElse(null);
+            queuedOrders.add(queued);
+        }
+        if (queuedOrders.isEmpty()) return;
+
+        List<Long> orderIds = queuedOrders.stream().map(OrderBook.QueuedOrder::orderId).toList();
+        Map<Long, Order> ordersById = orderRepository.findAllById(orderIds).stream()
+                .collect(Collectors.toMap(Order::getOrderId, o -> o));
+
+        List<OrderBook.QueuedOrder> toRequeue = new ArrayList<>();
+        for (OrderBook.QueuedOrder q : queuedOrders) {
+            Order order = ordersById.get(q.orderId());
             if (order == null) continue; // 이론상 없어야 하지만 방어적으로 스킵
             if (order.getOrderStatus() != OrderStatus.PENDING && order.getOrderStatus() != OrderStatus.PARTIAL) {
                 continue; // 이미 취소/체결 완료 - lazy deletion
@@ -258,7 +271,7 @@ public class MatchingService {
             execute(order, levels, isBuy);
 
             if (order.getOrderStatus() == OrderStatus.PENDING || order.getOrderStatus() == OrderStatus.PARTIAL) {
-                toRequeue.add(queued); // 이번 회차에 다 못 채웠으면 다음 회차를 위해 유지
+                toRequeue.add(q); // 이번 회차에 다 못 채웠으면 다음 회차를 위해 유지
             }
         }
 
