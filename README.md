@@ -95,7 +95,7 @@ src/main/java
 
 **가격-시간 우선순위 (Price-Time Priority) — 종목별 우선순위 큐(Heap) 기반**
 - 실제 연속경쟁매매(continuous double auction) 거래소가 쓰는 원칙을 그대로 구현: 매수는 지정가가 **높을수록**, 매도는 지정가가 **낮을수록**(= 더 공격적인 주문일수록) 먼저 호가를 소진하고, 동일 가격이면 먼저 낸 주문이 우선
-- 종목코드별로 매수/매도 `PriorityBlockingQueue`(`OrderBook`)를 메모리에 유지해 삽입 시 O(log n)으로 우선순위를 반영, 매칭 시점엔 DB 재정렬 없이 큐에서 O(log n)에 최우선 주문을 꺼냄 — 큐엔 정렬용 값(주문ID/가격/생성시각)만 담은 불변 스냅샷을 두고 실제 체결 시 최신 DB 상태를 재조회해서 처리(취소/체결된 주문은 이 시점에 자연스럽게 걸러짐 - lazy deletion). 앱 재시작 시엔 DB의 대기 주문으로 큐를 다시 채워서, 메모리 큐는 어디까지나 DB 위에 얹은 성능 최적화 계층으로 동작
+- 종목코드별로 매수/매도 `PriorityBlockingQueue`(`OrderBook`)를 메모리에 유지해 삽입 시 O(log n)으로 우선순위를 반영, 매칭 시점엔 DB 재정렬 없이 큐에서 O(log n)에 최우선 주문을 꺼냄 — 큐엔 정렬용 값(주문ID/가격/생성시각)만 담은 불변 스냅샷을 두고, 한 배치 사이클에서 꺼낸 주문들의 최신 DB 상태를 `findAllById`로 한 번에 조회해서 처리(취소/체결된 주문은 이 시점에 자연스럽게 걸러짐 - lazy deletion). 앱 재시작 시엔 DB의 대기 주문으로 큐를 다시 채워서, 메모리 큐는 어디까지나 DB 위에 얹은 성능 최적화 계층으로 동작
 - `MatchingService`가 이 순서대로 호가 10단계 잔량을 실제로 차감해가며 여러 주문의 중복 체결을 방지
 
 **자동 가격개선(Price Improvement) 5% 밴드 — 자체 설계 로직**
@@ -183,10 +183,12 @@ src/main/java
 
 ## 🚀 배포
 
-- AWS EC2 (Ubuntu)
-- Gradle 빌드 → JAR 패키징 → SCP 전송
-- `application-prod.yml` 분리로 운영 환경 설정 관리
-- `nohup java -jar` 백그라운드 실행
+- AWS EC2 (Ubuntu) — 단일 인스턴스에서 Kafka/Zookeeper와 앱을 함께 구동
+- 로컬에서 `./gradlew clean build` → `build/libs/stockTrade-0.0.1-SNAPSHOT.jar` 를 SCP로 전송
+- 서버에서 기존 프로세스 종료 후 `SPRING_PROFILES_ACTIVE=prod nohup java -jar stockTrade-0.0.1-SNAPSHOT.jar &` 로 재기동
+  - **`prod` 프로파일 필수**: 기본 `application.yaml` 은 정적 리소스/템플릿 경로를 `file:src/main/resources/...`(개발용 파일 경로)로 잡고 있어, 프로파일 없이 JAR로 띄우면 CSS/JS가 404 → 로그인 리다이렉트로 이어져 화면이 깨진다. `application-prod.yml` 이 이 경로를 `classpath:` 로 되돌린다
+  - JAR 파일만 덮어쓰고 재기동을 빠뜨리면 실행 중인 JVM은 옛 파일을 계속 물고 있으므로, 배포 시 반드시 프로세스를 내렸다 올린다 (기존 프로세스가 SSE 연결 때문에 graceful shutdown에 최대 30초 걸리므로, 그 전에 새로 띄우면 8080 포트 충돌로 기동 실패)
+- 시크릿(`application-secret.yaml`)은 JAR와 같은 디렉토리에 두거나 환경변수로 주입 — `spring.config.import` 가 실행 디렉토리 기준 상대경로(`./application-secret.yaml`)라, 기동 시 `cd` 한 위치에 파일이 있어야 읽힌다
 
 ---
 
@@ -201,6 +203,8 @@ src/main/java
 | 보유주식 실시간 스트림이 DB 커넥션 풀을 고갈시켜 주문/보유종목 등 DB를 쓰는 API 전체가 500 에러로 번짐 | 가격 틱마다(초당) 캐싱 없이 DB를 재조회 → 회원 단위 1.5초 TTL 캐시 추가, 실제 체결 시에만 즉시 무효화해 정확성은 유지 | 반복 조회 시 DB 쿼리 스킵, 커넥션 풀 고갈 재발 방지 |
 | 웹소켓이 "message too big"(1009)으로 끊김 | 여러 종목 동시 구독 시 기본 텍스트 메시지 버퍼(8KB)를 초과 → `WebSocketContainer` 버퍼 크기를 1MB로 확대 | 버퍼 **8KB → 1MB(128배)**, 다종목 동시구독 시 연결 끊김 제거 |
 | 매수 잔고 차감/환급과 주문 상태 저장이 원자적이지 않아, 처리 도중 예외가 나면 "잔고만 변하고 주문 기록은 안 남는" 상태가 될 수 있음 | 잔고 변경(`memberRepository.save`)과 주문 상태 저장(`orderRepository.save`)이 각각 별도로 커밋되는 구조였음 → 매수 주문 생성, 주문 취소, 장마감 자동취소 3개 경로 모두 `@Transactional`로 묶어서 원자적으로 처리 | 격리된 재현 테스트로 환급 금액이 1원 오차 없이 정확히 복구되는 것 확인 |
+| 매칭 배치가 우선순위 큐에서 주문을 하나 꺼낼 때마다 `findById`로 DB를 건건이 재조회(N+1) | 큐를 우선순위 순서대로 전부 꺼낸 뒤 `findAllById`로 1회 배치 조회하도록 변경(체결 순서·가격-시간 우선순위 로직은 그대로) | **(실측, JFR 202초 프로파일링)** Old GC 41→**7회(-83%)**, Young GC 609→496회(-18.6%), 처리량 +7.3%. 단 부하생성기와 서버가 CPU를 공유하는 로컬 환경이라 응답 p95까지의 개선은 확인 못 함 |
+| AI 뉴스 영향 분석이 배포 후 한 번도 성공한 적이 없었는데 화면상 "분석 중"으로만 보여 몇 주간 방치됨 | Anthropic API 키 미설정(빈 문자열이 `x-api-key`로 전송 → 401) + 이후엔 크레딧 잔액 부족(400). `NewsAnalysisService`의 `try/catch`가 예외를 삼키고 "분석 중"으로 폴백해 실패가 드러나지 않았음 → 서버에 키·크레딧 반영 후, 정상 판단/캐싱(16초→0.03초)/무의미 뉴스 필터링을 실제 Claude 응답으로 검증 | 에러를 우아하게 처리하는 설계가 "한 번도 성공한 적 없음"을 가릴 수 있다는 점 확인 — 정상 경로가 최소 한 번은 성공하는지 직접 검증하는 절차 추가 |
 
 ---
 
@@ -208,7 +212,7 @@ src/main/java
 
 - Access Token 만료 시 재발급 필요 (24h), 실시간 웹소켓 승인키도 동일하게 관리
 - 요청 헤더 필수 값: `Authorization`, `appkey`, `appsecret`, `tr_id`
-- 네이버 뉴스 API 사용을 위해 Client ID 및 Client Secret 키 필요, 카카오 로그인 사용을 위해 카카오 REST API 키/Client Secret 필요, AI 뉴스 영향 분석 사용을 위해 Anthropic API 키 필요
+- 네이버 뉴스 API 사용을 위해 Client ID 및 Client Secret 키 필요, 카카오 로그인 사용을 위해 카카오 REST API 키/Client Secret 필요, AI 뉴스 영향 분석 사용을 위해 Anthropic API 키 **및 계정 크레딧 잔액** 필요(키/잔액이 없으면 분석은 예외 없이 조용히 "분석 중" 상태로 폴백됨)
 - 어드민 화면(`/admin/orders`)과 로그 조회를 쓰려면 `observability/docker-compose.yml`로 Loki+Grafana를 로컬에 띄워야 함(`docker compose up -d`)
 - **모든 API 키는 코드에 직접 넣지 않고, 환경변수 또는 프로젝트 루트의 `application-secret.yaml`(gitignore 처리됨, `application-secret.yaml.example` 참고)로 주입**
 
