@@ -97,7 +97,7 @@
 
                     <div class="price-hint" id="buyPriceHint" style="display:none;">
                         <label class="limit-feature-check">
-                            <input type="checkbox" checked disabled>
+                            <input type="checkbox" id="buyAutoImprovementCheck" checked>
                             자동 가격개선 (최대 5% 낮은 가격까지)
                         </label>
                         <p class="price-hint-desc">
@@ -684,7 +684,10 @@
                     orderType: orderType == 'buy' ? 'BUY' : 'SELL',
                     quantity: quantity.value,
                     price : submitPrice, /* 단가 */
-                    priceMode: (orderType == 'buy' ? buyPriceMode : priceMode).toUpperCase()
+                    priceMode: (orderType == 'buy' ? buyPriceMode : priceMode).toUpperCase(),
+                    /* 지정가 매수 + 자동 가격개선 체크가 켜진 경우에만 5% 밴드 적용 */
+                    autoPriceImprovement: orderType == 'buy' && buyPriceMode === 'limit'
+                        && document.getElementById('buyAutoImprovementCheck').checked
                 })
             }).then(r => r.json())
             .then(data => {

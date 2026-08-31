@@ -76,6 +76,7 @@ class MatchingServiceTest {
         order.setOrderType(OrderType.BUY);
         order.setOrderStatus(OrderStatus.PENDING);
         order.setPriceMode(PriceMode.LIMIT); // 이 테스트들은 모두 지정가 매수 시나리오
+        order.setAutoPriceImprovement(true); // 화면 체크박스 기본값(켜짐)과 동일 - 5% 자동 가격개선 밴드 적용
         order.setPrice(price);
         order.setQuantity(quantity);
         order.setMatchedQuantity(0);
@@ -215,6 +216,25 @@ class MatchingServiceTest {
         ArgumentCaptor<Trade> tradeCaptor = ArgumentCaptor.forClass(Trade.class);
         verify(tradeRepository, times(1)).save(tradeCaptor.capture());
         assertEquals(96000, tradeCaptor.getValue().getMatchedPrice(), "체결가는 밴드 안의 유일한 호가인 96,000원이어야 한다");
+    }
+
+    @Test
+    @DisplayName("3-1. 지정가 매수라도 자동 가격개선 체크를 끄면(autoPriceImprovement=false) 5% 밴드 없이 지정가 이하 호가면 전부 체결된다")
+    void 지정가_매수라도_자동가격개선을_끄면_5퍼센트_밴드가_적용되지_않는다() {
+        // 지정가 100,000원 매수 10주 + 자동 가격개선 OFF. 매도호가 96,000원(밴드 내) 5주, 90,000원(밴드 밖) 5주.
+        // 밴드가 적용되면 90,000원은 제외돼 5주만 체결되지만, 체크를 껐으므로 지정가 이하인 두 호가 모두 체결돼야 한다.
+        Order order = newBuyOrder(10, 100_000);
+        order.setAutoPriceImprovement(false);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
+                .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
+
+        matchingService.tryMatch(order);
+
+        assertEquals(10, order.getMatchedQuantity(), "밴드가 꺼졌으므로 지정가 이하인 두 호가 물량(5+5주) 모두 체결돼야 한다");
+        assertEquals(OrderStatus.MATCHED, order.getOrderStatus());
     }
 
     @Test

@@ -311,8 +311,9 @@ public class MatchingService {
 
     private boolean isEligible(int levelPrice, Order order, boolean isBuy) {
         if (isBuy) {
-            // 5% 자동 가격개선 밴드는 지정가(LIMIT) 매수 전용 기능 - 현재가(MARKET) 매수는 밴드 없이 지정가 이하 최우선호가로만 체결
-            if (order.getPriceMode() != PriceMode.LIMIT) {
+            // 5% 자동 가격개선 밴드는 "지정가(LIMIT) 매수 + 화면에서 자동 가격개선 체크(autoPriceImprovement=true)"일 때만 적용.
+            // 현재가(MARKET) 매수거나, 지정가여도 체크를 해제했으면 밴드 없이 지정가 이하 최우선호가로만 체결.
+            if (order.getPriceMode() != PriceMode.LIMIT || !order.isAutoPriceImprovement()) {
                 return levelPrice <= order.getPrice();
             }
             int minEligiblePrice = (int) Math.ceil(order.getPrice() * BUY_IMPROVEMENT_FLOOR_RATIO);
@@ -422,7 +423,7 @@ public class MatchingService {
        별도 DB 컬럼/통계 시스템 없이, Order.price(지정가)와 Trade.matchedPrice(실제 체결가)가 이미 DB에 남아있으므로
        이 로그는 Loki/Grafana에서 실시간으로 훑어볼 수 있는 보조 채널이고, 정확한 집계는 두 테이블을 JOIN해서 언제든 다시 계산 가능하다. */
     private void logPriceImprovement(Order order, boolean isBuy, int fillPrice) {
-        if (!isBuy || order.getPriceMode() != PriceMode.LIMIT || order.getPrice() <= 0) return;
+        if (!isBuy || order.getPriceMode() != PriceMode.LIMIT || !order.isAutoPriceImprovement() || order.getPrice() <= 0) return;
 
         double improvementPercent = (order.getPrice() - fillPrice) * 100.0 / order.getPrice();
         log.info("[가격개선] {} {} 지정가 {}원 체결가 {}원 개선율 {}%",

@@ -246,6 +246,7 @@ function doBuy(stockPool, priceMode) {
     priceMode,
     price: orderPrice,
     quantity: 1 + Math.floor(Math.random() * 5),
+    autoPriceImprovement: priceMode === 'LIMIT', // 지정가 매수는 화면 기본값(체크됨)과 동일하게 5% 밴드 적용
   }, { action: `buy_${priceMode.toLowerCase()}` }, [200, 400]);
 
   orderDuration.add(res.timings.duration);

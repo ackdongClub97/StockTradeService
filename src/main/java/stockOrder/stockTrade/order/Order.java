@@ -26,7 +26,12 @@ public class Order {
     @Enumerated(EnumType.STRING)
     private OrderStatus orderStatus;
     @Enumerated(EnumType.STRING)
-    private PriceMode priceMode; // 현재가(MARKET)/지정가(LIMIT) - 매수 자동 가격개선(5% 밴드)은 LIMIT에서만 적용
+    private PriceMode priceMode; // 현재가(MARKET)/지정가(LIMIT)
+
+    // 지정가 매수의 5% 자동 가격개선 밴드 사용 여부 - 화면 체크박스 상태를 그대로 저장.
+    // LIMIT 매수여도 이 값이 false면 밴드 없이 지정가 이하 최우선호가로만 체결한다(MARKET과 동일).
+    @Column(columnDefinition = "boolean default false")
+    private boolean autoPriceImprovement;
 
     private int price;
 
