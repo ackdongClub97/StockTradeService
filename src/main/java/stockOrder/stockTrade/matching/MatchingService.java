@@ -454,23 +454,34 @@ public class MatchingService {
 
     /* Kafka로 주문이 들어온 직후 즉시 한 번 체결을 시도(빠른 주문) */
     public void tryMatch(Order order) {
-        Order orderData = orderRepository.findById(order.getOrderId()).orElse(null);
-
-        if(orderData == null) {
-            log.error("[match] 주문 없음: {}", order.getOrderId());
-            return;
-        }
+        // 종목코드는 주문 생성 후 바뀌지 않으므로 Kafka 메시지 값을 그대로 써서 락 대상만 정하고,
+        // 체결 판단에 쓰는 주문 상태는 반드시 락을 잡은 뒤에 DB에서 다시 읽는다.
+        String stockCode = order.getStockCode();
 
         // 본장 전에는 구독만 걸어서 데이터가 미리 쌓이게 하고, 실제 체결 시도는 본장이 열려야 함
-        kisWebSocketService.subscribe(orderData.getStockCode());
+        kisWebSocketService.subscribe(stockCode);
 
         if (!kisService.isMarketOpen()) {
-            log.info("[tryMatch] 본장 아님 - 대기만 걸어둠: {}", orderData.getOrderId());
+            log.info("[tryMatch] 본장 아님 - 대기만 걸어둠: {}", order.getOrderId());
             return;
         }
 
-        ConsumptionState state = stateFor(orderData.getStockCode());
+        ConsumptionState state = stateFor(stockCode);
         synchronized (state) {
+            // 예전엔 락 밖에서 findById를 해서, 락을 기다리는 동안 배치(matchOrders)가 같은 주문을 이미 체결해도
+            // 오래된(PENDING, 체결 0주) 객체로 execute를 한 번 더 돌려 이중 체결이 날 수 있었음.
+            // 상태 확인도 없어서, 제출 후 Kafka 소비 전에 취소(환급 완료)된 주문까지 체결될 수 있었음.
+            Order orderData = orderRepository.findById(order.getOrderId()).orElse(null);
+
+            if (orderData == null) {
+                log.error("[match] 주문 없음: {}", order.getOrderId());
+                return;
+            }
+            if (orderData.getOrderStatus() != OrderStatus.PENDING && orderData.getOrderStatus() != OrderStatus.PARTIAL) {
+                log.info("[tryMatch] 이미 처리된 주문 - 건너뜀: {} {}", orderData.getOrderId(), orderData.getOrderStatus());
+                return;
+            }
+
             AskingPriceDTO book = kisWebSocketService.getCachedAskingPrice(orderData.getStockCode());
             if (book == null) {
                 log.info("[tryMatch] {} {} 호가 데이터 아직 없음 - 다음 배치에서 재시도", orderData.getOrderId(), orderData.getStockCode());

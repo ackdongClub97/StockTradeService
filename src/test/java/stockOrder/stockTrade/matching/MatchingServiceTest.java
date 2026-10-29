@@ -32,11 +32,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -399,5 +401,103 @@ class MatchingServiceTest {
         assertEquals(OrderStatus.MATCHED, stillPendingOrder.getOrderStatus());
 
         verify(tradeRepository, times(1)).save(any(Trade.class)); // 체결은 취소되지 않은 주문 1건만 발생
+    }
+
+    @Test
+    @DisplayName("9. 즉시체결 취소 반영 - 제출 후 Kafka 소비 전에 취소(환급 완료)된 주문은 tryMatch에서 체결되지 않는다")
+    void Kafka_소비_전에_취소된_주문은_즉시체결되지_않는다() {
+        Order message = newBuyOrder(10, 50_000); // Kafka 메시지에 실린 건 제출 시점(PENDING) 상태
+        Order cancelledInDb = newBuyOrder(10, 50_000);
+        cancelledInDb.setOrderStatus(OrderStatus.CANCELLED);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(cancelledInDb));
+        // 체결 가능한 호가가 있는 상황 - 상태 확인이 없으면 취소된 주문도 그대로 체결된다.
+        // 수정 후엔 상태 확인에서 먼저 빠져나가 호가/회원을 조회하지 않으므로 lenient
+        lenient().when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(askingPriceWith("49000", "10"));
+        lenient().when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
+
+        matchingService.tryMatch(message);
+
+        assertEquals(0, cancelledInDb.getMatchedQuantity());
+        assertEquals(OrderStatus.CANCELLED, cancelledInDb.getOrderStatus(), "취소된 주문이 체결로 되살아나면 안 된다");
+        verify(tradeRepository, times(0)).save(any(Trade.class));
+    }
+
+    @Test
+    @DisplayName("10. 락 대기 중 상태 변경 - tryMatch가 종목 락을 기다리는 동안 배치가 같은 주문을 전량 체결하면, tryMatch는 다시 체결하지 않는다")
+    void 락을_기다리는_동안_배치가_체결한_주문은_즉시체결이_중복으로_체결하지_않는다() throws Exception {
+        // DB를 흉내냄: 조회할 때마다 현재 저장된 상태의 복사본(별도 엔티티 인스턴스)을 돌려주고, save하면 그 상태를 덮어쓴다
+        AtomicReference<Order> db = new AtomicReference<>(newBuyOrder(10, 50_000));
+        when(orderRepository.findById(ORDER_ID)).thenAnswer(inv -> Optional.of(copyOf(db.get())));
+        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+            Order saved = inv.getArgument(0);
+            db.set(copyOf(saved));
+            return saved;
+        });
+        when(memberRepository.findByMemberId(MEMBER_ID)).thenAnswer(inv -> Optional.of(newMember()));
+        when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
+        // 매 호출마다 새 틱 - 같은 틱 잔량 공유(6·7번 테스트)가 아니라 순수하게 주문 상태 재확인만 검증하기 위함
+        when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenAnswer(inv -> askingPriceWith("49000", "100"));
+
+        matchingService.registerOrder(db.get());
+
+        Thread[] tryMatchThread = new Thread[1];
+        // 배치가 종목 락을 잡은 상태에서 DB를 읽기 직전, 즉시체결 스레드가 같은 락에서 BLOCKED 될 때까지 기다린다
+        when(orderRepository.findAllById(any())).thenAnswer(inv -> {
+            tryMatchThread[0].start();
+            long deadline = System.currentTimeMillis() + 5_000;
+            while (tryMatchThread[0].getState() != Thread.State.BLOCKED && System.currentTimeMillis() < deadline) {
+                Thread.onSpinWait();
+            }
+            return List.of(copyOf(db.get()));
+        });
+
+        Order message = newBuyOrder(10, 50_000); // Kafka 메시지(제출 시점 PENDING 상태)
+        tryMatchThread[0] = new Thread(() -> matchingService.tryMatch(message));
+
+        matchingService.matching();
+        tryMatchThread[0].join(5_000);
+
+        assertEquals(10, db.get().getMatchedQuantity(), "주문수량(10주)을 넘어서 체결되면 안 된다");
+        assertEquals(OrderStatus.MATCHED, db.get().getOrderStatus());
+        verify(tradeRepository, times(1)).save(any(Trade.class)); // 배치 1건만 - 즉시체결이 한 번 더 체결하면 2건
+    }
+
+    @Test
+    @DisplayName("11. Kafka 재전달 - 이미 전량 체결(MATCHED)된 주문 메시지가 다시 와도 추가 체결되지 않는다")
+    void 이미_체결된_주문_메시지가_재전달되어도_다시_체결하지_않는다() {
+        Order message = newBuyOrder(10, 50_000);
+        Order matchedInDb = newBuyOrder(10, 50_000);
+        matchedInDb.setOrderStatus(OrderStatus.MATCHED);
+        matchedInDb.setMatchedQuantity(10);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(matchedInDb));
+        lenient().when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(askingPriceWith("49000", "10"));
+
+        matchingService.tryMatch(message);
+
+        assertEquals(10, matchedInDb.getMatchedQuantity());
+        assertEquals(OrderStatus.MATCHED, matchedInDb.getOrderStatus());
+        verify(tradeRepository, times(0)).save(any(Trade.class));
+    }
+
+    @Test
+    @DisplayName("12. 커밋 전 소비 - Kafka 메시지가 DB 커밋보다 먼저 소비돼 주문이 아직 안 보이면 체결하지 않고 배치에 맡긴다")
+    void DB에_아직_없는_주문은_즉시체결하지_않는다() {
+        Order message = newBuyOrder(10, 50_000);
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.empty());
+
+        matchingService.tryMatch(message);
+
+        verify(tradeRepository, times(0)).save(any(Trade.class));
+        verify(orderRepository, times(0)).save(any(Order.class));
+    }
+
+    private Order copyOf(Order src) {
+        Order copy = newBuyOrder(src.getQuantity(), src.getPrice());
+        copy.setOrderId(src.getOrderId());
+        copy.setMemberId(src.getMemberId());
+        copy.setOrderStatus(src.getOrderStatus());
+        copy.setMatchedQuantity(src.getMatchedQuantity());
+        copy.setCreatedAt(src.getCreatedAt());
+        return copy;
     }
 }
