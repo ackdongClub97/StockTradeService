@@ -10,6 +10,8 @@ import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import reactor.core.publisher.Flux;
@@ -17,6 +19,7 @@ import stockOrder.stockTrade.member.CustomerDetails;
 import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderRepository;
 import stockOrder.stockTrade.order.OrderStatus;
+import stockOrder.stockTrade.outbox.DeadLetterService;
 
 import java.time.Instant;
 import java.util.List;
@@ -32,6 +35,7 @@ public class AdminController {
     private final LokiClient lokiClient;
     private final AdminAlertService adminAlertService;
     private final SessionRegistry sessionRegistry;
+    private final DeadLetterService deadLetterService;
 
     @Value("${admin.member-id:}")
     private String adminMemberId;
@@ -68,6 +72,29 @@ public class AdminController {
             return ResponseEntity.status(403).build();
         }
         return ResponseEntity.ok(Map.of("count", countActiveSessions()));
+    }
+
+    /* 재시도 끝에 처리 못 한 Kafka 메시지(DLQ) 목록 - 아직 재발행 안 한 것만 */
+    @GetMapping("/api/admin/dead-letters")
+    @ResponseBody
+    public ResponseEntity<?> deadLetters(@AuthenticationPrincipal CustomerDetails customerDetails) {
+        if (!isAdmin(customerDetails)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok(deadLetterService.findPending());
+    }
+
+    /* 원인을 해결한 뒤 DLQ 메시지를 원래 토픽으로 재발행 */
+    @PostMapping("/api/admin/dead-letters/{id}/replay")
+    @ResponseBody
+    public ResponseEntity<?> replayDeadLetter(@AuthenticationPrincipal CustomerDetails customerDetails,
+                                              @PathVariable Long id) throws Exception {
+        if (!isAdmin(customerDetails)) {
+            return ResponseEntity.status(403).build();
+        }
+        return deadLetterService.replay(id)
+                ? ResponseEntity.ok(Map.of("message", "SUCCESS"))
+                : ResponseEntity.status(404).body(Map.of("message", "없거나 이미 재발행한 메시지입니다."));
     }
 
     /* 특정 주문 근처 시각의 로그를 Loki에서 직접 조회(Grafana 없이 이 화면에서 바로 확인) */

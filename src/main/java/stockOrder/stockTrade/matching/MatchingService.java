@@ -5,9 +5,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import stockOrder.stockTrade.admin.AdminAlert;
@@ -16,7 +18,6 @@ import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.AskingPriceDTO;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
-import stockOrder.stockTrade.member.Member;
 import stockOrder.stockTrade.member.MemberRepository;
 import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderRepository;
@@ -49,6 +50,7 @@ public class MatchingService {
     private final RealizedPnlService realizedPnlService;
     private final AdminAlertService adminAlertService;
     private final FraudDetectionService fraudDetectionService;
+    private final TransactionTemplate transactionTemplate;
     private final Sinks.Many<Order> orderResultSink = Sinks.many().multicast().onBackpressureBuffer();
 
     // cancelForMarketClose를 같은 클래스 안에서 직접 호출하면 @Transactional 프록시를 안 거쳐서 트랜잭션이 안 걸림 -
@@ -179,25 +181,24 @@ public class MatchingService {
     }
 
     /* 매수 주문은 생성 시점에 전체 금액이 예약(차감)되어 있으므로, 미체결 잔량분만큼 환급 후 취소 처리 - OrderController.cancelOrder의 환급 로직과 동일.
-       환급(memberRepository.save)과 주문 취소 상태 저장(orderRepository.save)을 트랜잭션으로 묶어서, 중간에 실패해도
+       환급(memberRepository.addSeed)과 주문 취소 상태 저장(orderRepository.save)을 트랜잭션으로 묶어서, 중간에 실패해도
        "환급만 되고 주문은 그대로(PENDING)" 상태가 안 남게 함 - 그런 상태로 남으면 다음날 재시도 때 중복 환급될 위험도 있었음.
        protected인 이유: @Transactional이 걸리려면 프록시가 오버라이드할 수 있어야 하는데 private는 불가능(self 호출부 참고) */
     @Transactional
     protected void cancelForMarketClose(Order order) {
+        // 주문 행 → 회원 행 순서로 갱신 (OrderCommandService.cancel, execute와 같은 순서 - 데드락 방지)
+        order.setOrderStatus(OrderStatus.CANCELLED);
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.saveAndFlush(order);
+
         if (order.getOrderType() == OrderType.BUY) {
             int remainingQty = order.getQuantity() - order.getMatchedQuantity();
             int refund = order.getPrice() * remainingQty;
 
             if (refund > 0) {
-                Member member = memberRepository.findByMemberId(order.getMemberId()).orElseThrow();
-                member.setSeed(member.getSeed() + refund);
-                memberRepository.save(member);
+                memberRepository.addSeed(order.getMemberId(), refund);
             }
         }
-
-        order.setOrderStatus(OrderStatus.CANCELLED);
-        order.setUpdatedAt(LocalDateTime.now());
-        orderRepository.save(order);
 
         orderResultSink.tryEmitNext(order);
         log.info("[MatchingService] 장마감 주문취소 {} / {}", order.getMemberId(), order.getOrderId());
@@ -385,8 +386,6 @@ public class MatchingService {
             trade.setMatchedPrice(fill.price());
             trade.setMatchedQuantity(fill.quantity());
             trade.setMatchedAt(LocalDateTime.now());
-            tradeRepository.save(trade);
-            realizedPnlService.invalidate(order.getMemberId()); // 새 체결이 생겼으니 보유종목/매매차익 캐시 갱신 필요
 
             order.setMatchedQuantity(order.getMatchedQuantity() + fill.quantity());
             order.setMatchedPrice(fill.price());
@@ -394,8 +393,16 @@ public class MatchingService {
             order.setOrderStatus(order.getMatchedQuantity() >= order.getQuantity() ? OrderStatus.MATCHED : OrderStatus.PARTIAL);
             order.setLastUnmatchedReason(null); // 이번 회차에 진전이 있었으니 이전 미체결 사유는 더 이상 유효하지 않음
 
-            orderRepository.save(order);
-            updateSeed(order, fill.price(), fill.quantity());
+            // 주문 상태·체결 원장·잔고 정산을 한 트랜잭션으로 - 예전엔 각자 따로 커밋돼서 중간에 실패하면 반쪽만 남을 수 있었음.
+            // 주문 저장이 맨 앞인 이유: 그 사이 사용자가 취소했으면 @Version 충돌이 여기서 바로 나서 Trade/잔고는 아예 안 건드림
+            // saveAndFlush: 주문 UPDATE를 커밋 시점이 아니라 지금 실행해서 주문 행 → 회원 행 순서로 락을 잡게 함(취소와 같은 순서, 데드락 방지)
+            transactionTemplate.execute(status -> {
+                orderRepository.saveAndFlush(order);
+                tradeRepository.save(trade);
+                updateSeed(order, fill.price(), fill.quantity());
+                return null;
+            });
+            realizedPnlService.invalidate(order.getMemberId()); // 새 체결이 생겼으니 보유종목/매매차익 캐시 갱신 필요
             orderResultSink.tryEmitNext(order);
             fraudDetectionService.checkOnExecute(order);
 
@@ -404,6 +411,10 @@ public class MatchingService {
                     order.getMatchedQuantity(), fill.quantity(), fill.price(), order.getOrderStatus());
 
             logPriceImprovement(order, isBuy, fill.price());
+        } catch (OptimisticLockingFailureException e) {
+            // 이 주문을 읽은 뒤 체결 전에 사용자 취소(OrderCommandService.cancel)가 먼저 커밋된 경우 - 이번 체결은 전부 롤백됨.
+            // computeFill이 깎아둔 이번 틱의 로컬 잔량은 복구하지 않음: 다음 틱에 원본으로 리셋되고, 덜 체결되는 쪽(보수적)이라 문제없음
+            log.info("[체결 롤백] {} {} 체결 직전에 주문이 먼저 변경됨(취소 등) - 이번 체결 취소", order.getOrderId(), order.getStockCode());
         } catch (Exception e) {
             log.error("[매칭 오류] 주문 {} 처리 중 예외 발생: {}", order.getOrderId(), e.getMessage(), e);
             adminAlertService.publish(new AdminAlert(order.getOrderId(), order.getStockCode(),
@@ -431,20 +442,18 @@ public class MatchingService {
                 String.format("%.2f", improvementPercent));
     }
 
+    /* 잔고 증감은 seed = seed + delta 원자적 UPDATE로 처리 - 주문 접수(차감)/취소 환급과 동시에 일어나도 서로 덮어쓰지 않음 */
     private void updateSeed(Order order, int fillPrice, int fillQty) {
-        Member member = memberRepository.findByMemberId(order.getMemberId()).orElseThrow();
-
+        int delta;
         if(order.getOrderType() == OrderType.BUY) {
             // 주문 시점에 order.price 기준으로 이미 예약(차감)해뒀으니, 실제체결가가 더 쌌으면(호가가 지정가보다 유리) 차액만 환급
-            int refund = (order.getPrice() - fillPrice) * fillQty;
-            if (refund != 0) {
-                member.setSeed(member.getSeed() + refund);
-            }
+            delta = (order.getPrice() - fillPrice) * fillQty;
         } else {
-            int amount = fillPrice * fillQty;
-            member.setSeed(amount + member.getSeed());
+            delta = fillPrice * fillQty;
         }
-        memberRepository.save(member);
+        if (delta != 0) {
+            memberRepository.addSeed(order.getMemberId(), delta);
+        }
     }
 
     public Flux<Order> getOrderResultStream(String memberId) {

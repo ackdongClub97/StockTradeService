@@ -2,6 +2,8 @@ package stockOrder.stockTrade.matching;
 
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 
 /* 종목 하나에 대한 매수/매도 호가창(Order Book). 가격-시간 우선순위(price-time priority)를
@@ -31,27 +33,37 @@ public class OrderBook {
     private final PriorityBlockingQueue<QueuedOrder> buyQueue = new PriorityBlockingQueue<>(11, BUY_PRIORITY);
     private final PriorityBlockingQueue<QueuedOrder> sellQueue = new PriorityBlockingQueue<>(11, SELL_PRIORITY);
 
+    /* 지금 큐에 들어 있는 주문ID - 같은 주문이 두 번 등록되지 않게 한다(멱등 등록).
+       Outbox 릴레이는 "최소 한 번" 발행이라 같은 주문 메시지가 중복으로 올 수 있고, 재시작 복구(DB 재구성)와
+       신규 등록이 겹칠 수도 있음. 같은 주문이 큐에 두 개 있으면 한 배치 회차에 같은 주문을 두 번 체결 시도하게 된다. */
+    private final Set<Long> queuedIds = ConcurrentHashMap.newKeySet();
+
     void offerBuy(Long orderId, int price, LocalDateTime createdAt) {
-        buyQueue.offer(new QueuedOrder(orderId, price, createdAt));
+        if (queuedIds.add(orderId)) buyQueue.offer(new QueuedOrder(orderId, price, createdAt));
     }
 
     void offerSell(Long orderId, int price, LocalDateTime createdAt) {
-        sellQueue.offer(new QueuedOrder(orderId, price, createdAt));
+        if (queuedIds.add(orderId)) sellQueue.offer(new QueuedOrder(orderId, price, createdAt));
     }
 
     void requeueBuy(QueuedOrder queuedOrder) {
-        buyQueue.offer(queuedOrder);
+        if (queuedIds.add(queuedOrder.orderId())) buyQueue.offer(queuedOrder);
     }
 
     void requeueSell(QueuedOrder queuedOrder) {
-        sellQueue.offer(queuedOrder);
+        if (queuedIds.add(queuedOrder.orderId())) sellQueue.offer(queuedOrder);
     }
 
     QueuedOrder pollBuy() {
-        return buyQueue.poll();
+        return removeId(buyQueue.poll());
     }
 
     QueuedOrder pollSell() {
-        return sellQueue.poll();
+        return removeId(sellQueue.poll());
+    }
+
+    private QueuedOrder removeId(QueuedOrder polled) {
+        if (polled != null) queuedIds.remove(polled.orderId());
+        return polled;
     }
 }

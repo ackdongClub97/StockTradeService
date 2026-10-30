@@ -1,0 +1,18 @@
+# 로컬 개발용 인프라. 관측(Loki/Grafana/Prometheus)은 observability/docker-compose.yml에 따로 있음.
+# 계정/비밀번호는 로컬 전용 기본값 - 운영에서 쓰지 말 것.
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: stocktrade-mysql
+    ports:
+      - "3307:3306" # 3306은 로컬에 직접 설치된 MySQL이 쓰고 있어서 3307로 노출
+    environment:
+      MYSQL_DATABASE: stocktrade
+      MYSQL_USER: stocktrade
+      MYSQL_PASSWORD: stocktrade
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:

@@ -44,6 +44,13 @@ public class Order {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // 낙관적 락 - 체결(MatchingService)과 사용자 취소(OrderCommandService.cancel)가 같은 주문을 동시에 바꾸면
+    // 나중에 저장하는 쪽이 실패하고 롤백된다("체결도 되고 환급도 된" 상태 방지).
+    // default 0: ddl-auto update로 컬럼이 추가될 때 기존 행이 null이면 Spring Data가 새 엔티티로 오인해서 INSERT를 시도함
+    @Version
+    @Column(columnDefinition = "bigint default 0")
+    private Long version;
+
     @Enumerated(EnumType.STRING)
     private UnmatchReason lastUnmatchedReason; // 가장 최근 매칭 시도에서 (더 이상) 체결되지 않은 이유 - 관리자 화면용
     private LocalDateTime lastAttemptAt;       // 가장 최근 매칭 시도 시각

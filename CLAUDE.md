@@ -19,7 +19,11 @@
 
 앱이 떠 있다고 가정하는 로컬 인프라:
 - Kafka 브로커 `localhost:9092` (토픽 `stock-order`, `stock-order-result` — 자동 생성 설정이 없으므로 브로커/토픽이 미리 있어야 함).
-- H2 파일 DB `~/stockTrade` (자동 생성, `spring.jpa.hibernate.ddl-auto: update`). 콘솔은 `/h2-console`.
+- MySQL 8.4: 저장소 루트 `docker-compose.yml`(`docker compose up -d mysql`), **호스트 포트 3307** — 3306은 이 PC에 직접 설치된 MySQL이 사용 중. `spring.jpa.hibernate.ddl-auto: update`. 2026-10-30에 H2에서 전환했고 H2 의존성은 제거됨(예전 `~/stockTrade.mv.db` 파일은 이전하지 않고 남겨둠). 운영(EC2) 배포는 당분간 하지 않으므로 `prod` 프로파일은 신경 쓰지 않는다.
+
+테스트:
+- **`./gradlew test`는 Docker가 실행 중이어야 한다.** 통합 테스트(`@DataJpaTest`, `@SpringBootTest`)는 `support/MySqlContainerConfig`(Testcontainers `mysql:8.4` + `@ServiceConnection`)로 MySQL 컨테이너를 띄워서 돈다 — 운영 파일 DB나 실제 KIS API를 건드리지 않는다.
+- `StockTradeApplicationTests`는 `KisService`/`KisWebSocketService`를 `@MockitoBean`으로 막고 Kafka 리스너 자동 시작을 꺼서 외부 연동 없이 기동만 확인한다. 실제 KIS를 호출하면 연속 실행 시 토큰 발급 제한에 걸려 실패했었음.
 
 이 저장소에는 설정된 린터가 없다.
 
@@ -36,14 +40,15 @@
 - `security` — `SecurityConfig`, 폼 로그인, 공개 페이지/API의 permitAll 경로.
 - `view` — `PageController`, Thymeleaf 페이지 라우팅(`/stockHome`, `/stock/{code}`, `/login`, `/join`, `/myPage`).
 - `admin` — 미체결 주문 운영/모니터링 (아래 "주문 모니터링 / 어드민" 참고).
+- `outbox` — Transactional Outbox(`OutboxEvent`, `OutboxRelay`)와 DLQ 적재/재발행(`DeadLetter`, `DeadLetterService`).
 
 ### 주문 흐름 (주문/매칭 코드를 건드리기 전에 반드시 이해해야 하는 핵심)
-1. `POST /api/order/create`(`OrderController`)가 주문을 `PENDING`으로 저장하고 `OrderService.sendOrder`로 Kafka 토픽 `stock-order`에 발행.
-2. `OrderService.processOrder`(`stock-order`의 `@KafkaListener`)가 소비해서 `MatchingService.tryMatch`로 현재 KIS 시세 기준 즉시체결을 시도.
+1. `POST /api/order/create`(`OrderController`) → `OrderCommandService.submit` 트랜잭션: 회원 행 비관적 락 → 잔고(매수)/보유수량(매도) 확인 → 매수는 잔고 예약 차감 → 주문 `PENDING` 저장 → **Outbox(`outbox_events`)에 `stock-order` 메시지 기록**. 커밋 후 컨트롤러가 `OrderBook` 등록 + `OutboxRelay.publishForAggregate`로 즉시 발행(실패 시 `OutboxRelay.publishPending`이 1초마다 재시도, 행 락으로 이중 발행 방지).
+2. `OrderService.processOrder`(`stock-order`의 `@KafkaListener`)가 소비해서 `MatchingService.tryMatch`로 즉시체결을 시도. 예외는 삼키지 않음 — `OrderKafkaConfig`의 `DefaultErrorHandler`가 재시도 2번 후 `stock-order.DLT`로 보내고(JSON 파싱 실패는 즉시), `DeadLetterService`가 `dead_letters`에 적재 + 어드민 알림, `POST /api/admin/dead-letters/{id}/replay`로 재발행. 메시지는 최소 한 번 전달이라 중복이 올 수 있음 — `tryMatch`의 락 안 상태 재확인, `Order @Version`, `OrderBook` 멱등 등록으로 중복에 안전.
 3. 즉시 체결되지 않으면 `MatchingService.matching()`의 `@Scheduled` 배치가 30초마다(`KisService.isMarketOpen()`일 때만) 돌면서 `PENDING`/`PARTIAL` 주문이 있는 종목코드를 모두 가져와 종목별 현재 시세를 조회하고, 가격-시간 우선순위대로 체결 가능한 주문을 매칭한다: `OrderRepository.findPendingBuyOrders`/`findPendingSellOrders`가 각각 `price DESC`/`price ASC`로 정렬(더 공격적인 지정가가 먼저 — 매수는 높을수록, 매도는 낮을수록), 같으면 `createdAt ASC`. README에는 "Spring Batch"라고 적혀 있지만 실제로는 평범한 `@Scheduled` 메서드다 — 프로젝트에 Spring Batch 의존성은 없다.
 4. 주문 상태 머신: `PENDING` → `MATCHED` / `PARTIAL` / `CANCELLED` / `FAILED`. `matchedQuantity`/`matchedPrice`는 주문의 요청 `quantity`/`price`와 별도로 관리.
 5. 체결 결과는 SSE로 주문한 회원에게 푸시: `MatchingService`가 멀티캐스트 `Sinks.Many<Order>`를 들고 있고, `OrderController.streamOrderResult`(`GET /api/order/stream`)에서 회원별로 필터링.
-6. 회원 투자금 잔고는 체결 시점에 `MatchingService.execute`/`updateSeed` 안에서 동기적으로 차감/입금 — 매수 주문은 체결 허용 전에 현재가 × 잔여수량으로 잔고를 검사.
+6. 잔고: 매수는 **주문 접수 시점**에 지정가 × 수량을 예약 차감하고, 체결 시엔 `MatchingService.updateSeed`가 실제 체결가와의 차액만 환급, 취소 시엔 미체결분 환급. 잔고 증감은 모두 `MemberRepository.addSeed`(`seed = seed + delta` 원자적 UPDATE). 체결(`execute`)은 주문·Trade·잔고를 한 트랜잭션으로 묶고, 취소/체결 경쟁은 `Order @Version`으로 나중 쪽이 롤백(취소가 지면 409). 락 순서는 항상 주문 행 → 회원 행(데드락 방지).
 
 ### KIS API 연동 (`KisService` + `KisWebSocketService`)
 - REST: 공용 bearer 토큰 하나를 `@Scheduled`(`TokenService.fetchToken`)로 12시간마다 갱신. KIS 토큰 만료는 24시간.
@@ -62,9 +67,9 @@
 - **Loki 로깅을 켜려면 `LOKI_URL`을 반드시 명시적으로 설정해야 한다 — 더 이상 `localhost`가 기본값이 아니다.** `logback-spring.xml`이 `LOKI` 어펜더(와 그 `<appender-ref>`)를 `<if condition='!"".equals(property("LOKI_URL"))'>`로 감싸고 있으며, 이를 위해 런타임 클래스패스에 `org.codehaus.janino:janino`가 필요하다. `LOKI_URL`이 없으면 조용히 `localhost:3100`을 가리키는 대신 Loki 로깅이 완전히 꺼진다.
 
 ### 보안
-- 세션 기반 폼 로그인 + 카카오 OAuth2 로그인(`SecurityConfig`), CSRF 비활성화, H2 콘솔용 frame options는 same-origin으로 완화.
+- 세션 기반 폼 로그인 + 카카오 OAuth2 로그인(`SecurityConfig`), CSRF 비활성화, frame options는 same-origin(예전 H2 콘솔용 설정이 남아 있음).
 - `BCryptPasswordEncoder` 빈은 별도 `@Configuration` 클래스인 `PasswordConfig`가 소유한다 — 원래 `SecurityConfig`에 있었지만, `SecurityConfig`가 `KakaoOAuth2UserService`에 의존하고 그게 다시 인코더에 의존해서 `SecurityConfig`가 자기 자신에 의존하는 순환이 생겼기 때문. 이 순환이 다시 생기지 않도록 인코더 빈을 `SecurityConfig`(또는 `SecurityConfig`가 의존하는 클래스)에 두지 말 것.
-- 공개(인증 불필요) 경로: `/login`, `/join`, 정적 리소스, `/stockHome`, `/stock/**`, `/api/member/**`, `/api/rank/**`, `/api/news/**`, `/api/stock/**`, `/api/volume/**`, `/api/sse/**`, `/h2-console/**`, `/oauth2/**`, `/login/oauth2/**`. 나머지(`/api/order/**` 포함)는 모두 인증 필요.
+- 공개(인증 불필요) 경로: `/login`, `/join`, 정적 리소스, `/stockHome`, `/stock/**`, `/api/member/**`, `/api/rank/**`, `/api/news/**`, `/api/stock/**`, `/api/volume/**`, `/api/sse/**`, `/oauth2/**`, `/login/oauth2/**`. 나머지(`/api/order/**` 포함)는 모두 인증 필요.
 - SSE 엔드포인트는 `DispatcherType.ASYNC`를 명시적으로 허용해야 한다 — Spring Security가 비동기 디스패치에서 인증을 다시 검사하기 때문에, 이걸 빠뜨리면 SSE 스트림이 403이 난다(README에 기록된 과거 사고).
 
 ### 설정

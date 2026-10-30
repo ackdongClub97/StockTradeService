@@ -7,7 +7,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -17,8 +16,7 @@ import stockOrder.stockTrade.kis.KisWebSocketService;
 import stockOrder.stockTrade.kis.ResponseOutputDTO;
 import stockOrder.stockTrade.matching.MatchingService;
 import stockOrder.stockTrade.member.CustomerDetails;
-import stockOrder.stockTrade.member.Member;
-import stockOrder.stockTrade.member.MemberRepository;
+import stockOrder.stockTrade.outbox.OutboxRelay;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -35,18 +33,17 @@ import java.util.stream.Collectors;
 @Slf4j
 public class OrderController {
 
-    private final OrderService orderService;
     private final OrderRepository orderRepository;
     private final MatchingService matchingService;
     private final KisService kisService;
     private final KisWebSocketService kisWebSocketService;
     private final RealizedPnlService realizedPnlService;
-    private final MemberRepository memberRepository;
     private final FraudDetectionService fraudDetectionService;
+    private final OrderCommandService orderCommandService;
+    private final OutboxRelay outboxRelay;
 
-    // 잔고 차감(BUY)/주문 저장이 하나로 안 묶여있으면, 중간에 DB 커넥션 예외 등이 나서 잔고만 빠지고
-    // 주문은 안 생기는 상태가 남을 수 있었음 - 트랜잭션으로 묶어서 둘 다 성공하거나 둘 다 롤백되게 함.
-    @Transactional
+    // 잔고 예약 + 주문 저장은 OrderCommandService.submit 트랜잭션 안에서 처리하고(회원 행 락으로 동시 주문 직렬화),
+    // 아래 OrderBook 등록/Kafka 발행(Outbox 즉시 발행)은 그 트랜잭션이 커밋된 뒤에 실행된다 - 커밋 전에 컨슈머가 주문을 읽는 일이 없도록.
     @PostMapping("/create")
     public ResponseEntity<Map<String, Object>> submitOrder(@RequestBody Order order, @AuthenticationPrincipal CustomerDetails customerDetails) {
         if (kisService.isBeforeOrderWindow()) {
@@ -55,39 +52,20 @@ public class OrderController {
 
         String memberId = customerDetails.getMember().getMemberId();
 
-        if (order.getOrderType() == OrderType.BUY) {
-            Member member = memberRepository.findByMemberId(memberId).orElseThrow();
-            long totalCost = (long) order.getPrice() * order.getQuantity();
-
-            if (member.getSeed() < totalCost) {
+        switch (orderCommandService.submit(order, memberId)) {
+            case INSUFFICIENT_SEED:
                 return ResponseEntity.badRequest().body(Map.of("message", "잔고가 부족합니다."));
-            }
-
-            // 대기 중인 주문 금액만큼 즉시 예약(차감) - 안 그러면 같은 잔고로 여러 건 주문이 가능해짐.
-            // 실제 체결가가 지정가보다 유리했으면 그 차액만 체결 시점에 환급되고(MatchingService.updateSeed),
-            // 취소하면 미체결분 예약이 그대로 환급된다(cancelOrder).
-            member.setSeed((int) (member.getSeed() - totalCost));
-            memberRepository.save(member);
-        } else {
-            long remaining = realizedPnlService.getRemainingQuantity(memberId, order.getStockCode());
-            long reserved = orderRepository.sumReservedSellQuantity(memberId, order.getStockCode());
-            long available = remaining - reserved;
-
-            if (order.getQuantity() > available) {
+            case INSUFFICIENT_QUANTITY:
                 return ResponseEntity.badRequest().body(Map.of("message", "보유 수량이 부족합니다."));
-            }
+            default:
+                break;
         }
-
-        order.setMemberId(memberId);
-        order.setOrderStatus(OrderStatus.PENDING);
-        order.setCreatedAt(LocalDateTime.now());
 
         log.info("order status {} / order Type {}", order.getOrderStatus(), order.getOrderType());
 
-        orderRepository.save(order);
         matchingService.registerOrder(order); // 가격-시간 우선순위 호가창(OrderBook)에 등록 - O(log n)
         fraudDetectionService.checkOnSubmit(order);
-        orderService.sendOrder(order);
+        outboxRelay.publishForAggregate(order.getOrderId()); // 커밋 후 즉시 발행 - 실패해도 OutboxRelay 주기 발행이 재시도
 
         return ResponseEntity.ok(Map.of("orderId", order.getOrderId()));
     }
@@ -219,10 +197,8 @@ public class OrderController {
         return ResponseEntity.ok(orderHistoryList);
     }
 
-    /* 대기 중(PENDING/PARTIAL)인 주문만 취소 가능. 이미 체결된 수량은 그대로 Trade에 남고, 남은 미체결분만 취소됨
-       환급(memberRepository.save)과 주문 취소 상태 저장(orderRepository.save)을 트랜잭션으로 묶어서
-       중간에 실패해도 "환급만 되고 주문은 그대로" 같은 불일치가 안 남게 함 */
-    @Transactional
+    /* 환급 + 취소 상태 저장은 OrderCommandService.cancel 트랜잭션 안에서 처리 - 체결과 동시에 일어나면
+       Order의 @Version 충돌로 나중 쪽이 롤백되고, 취소가 진 경우 409로 다시 시도하라고 응답한다 */
     @PostMapping("/{orderId}/cancel")
     public ResponseEntity<Map<String, String>> cancelOrder(@AuthenticationPrincipal CustomerDetails customerDetails,
                                                              @PathVariable Long orderId) {
@@ -231,35 +207,13 @@ public class OrderController {
         }
 
         String memberId = customerDetails.getMember().getMemberId();
-        Order order = orderRepository.findById(orderId).orElse(null);
 
-        if(order == null || !order.getMemberId().equals(memberId)) {
-            return ResponseEntity.status(404).body(Map.of("message", "주문을 찾을 수 없습니다."));
-        }
-
-        if(order.getOrderStatus() != OrderStatus.PENDING && order.getOrderStatus() != OrderStatus.PARTIAL) {
-            return ResponseEntity.badRequest().body(Map.of("message", "이미 처리되어 취소할 수 없는 주문입니다."));
-        }
-
-        // 매수는 주문 생성 시점에 전체 금액을 예약(차감)해뒀으므로, 취소 시 미체결 잔량분만큼 환급
-        if (order.getOrderType() == OrderType.BUY) {
-            int remainingQty = order.getQuantity() - order.getMatchedQuantity();
-            int refund = order.getPrice() * remainingQty;
-
-            if (refund > 0) {
-                Member member = memberRepository.findByMemberId(memberId).orElseThrow();
-                member.setSeed(member.getSeed() + refund);
-                memberRepository.save(member);
-            }
-        }
-
-        order.setOrderStatus(OrderStatus.CANCELLED);
-        order.setUpdatedAt(LocalDateTime.now());
-        orderRepository.save(order);
-
-        log.info("[주문취소] {} / {}", memberId, orderId);
-
-        return ResponseEntity.ok(Map.of("message", "SUCCESS"));
+        return switch (orderCommandService.cancel(memberId, orderId)) {
+            case NOT_FOUND -> ResponseEntity.status(404).body(Map.of("message", "주문을 찾을 수 없습니다."));
+            case NOT_CANCELLABLE -> ResponseEntity.badRequest().body(Map.of("message", "이미 처리되어 취소할 수 없는 주문입니다."));
+            case CONFLICT -> ResponseEntity.status(409).body(Map.of("message", "체결 처리 중이라 취소하지 못했습니다. 잠시 후 다시 시도해 주세요."));
+            case OK -> ResponseEntity.ok(Map.of("message", "SUCCESS"));
+        };
     }
 
     @GetMapping("/memberStockInfo")

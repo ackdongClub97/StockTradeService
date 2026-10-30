@@ -53,7 +53,6 @@ public class SecurityConfig {
                                 "/api/stock/*/stream/**",
                                 "/api/volume/**",
                                 "/api/sse/**",
-                                "/h2-console/**",
                                 "/oauth2/**",
                                 "/login/oauth2/**"
                         )

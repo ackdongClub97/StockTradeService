@@ -7,13 +7,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import stockOrder.stockTrade.admin.AdminAlertService;
 import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.AskingPriceDTO;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
-import stockOrder.stockTrade.member.Member;
 import stockOrder.stockTrade.member.MemberRepository;
 import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderRepository;
@@ -23,6 +23,8 @@ import stockOrder.stockTrade.order.PriceMode;
 import stockOrder.stockTrade.order.RealizedPnlService;
 import stockOrder.stockTrade.order.Trade;
 import stockOrder.stockTrade.order.TradeRepository;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -39,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,6 +63,8 @@ class MatchingServiceTest {
     @Mock private RealizedPnlService realizedPnlService;
     @Mock private AdminAlertService adminAlertService;
     @Mock private FraudDetectionService fraudDetectionService;
+    // 체결 시 주문·Trade·잔고를 묶는 트랜잭션 - 유닛 테스트에선 콜백만 그대로 실행되게 Mock 트랜잭션 매니저로 감쌈
+    @Spy private TransactionTemplate transactionTemplate = new TransactionTemplate(mock(PlatformTransactionManager.class));
 
     @InjectMocks
     private MatchingService matchingService;
@@ -84,13 +89,6 @@ class MatchingServiceTest {
         order.setMatchedQuantity(0);
         order.setCreatedAt(LocalDateTime.now());
         return order;
-    }
-
-    private Member newMember() {
-        Member member = new Member();
-        member.setMemberId(MEMBER_ID);
-        member.setSeed(10_000_000);
-        return member;
     }
 
     /* 매도호가 1단계(index 0)만 값을 채우고 나머지 9단계는 빈 호가(0)인 10단계 스냅샷 생성 */
@@ -125,7 +123,6 @@ class MatchingServiceTest {
     void 부분체결_후_잔량이_모두_체결되면_MATCHED_상태가_된다() {
         Order order = newBuyOrder(10, 50_000);
         when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         // 1차 시도: 지정가(50,000) 이하 매도호가 잔량이 4주뿐 -> 4주만 체결, 6주는 미체결로 남음
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
@@ -157,6 +154,10 @@ class MatchingServiceTest {
 
         int totalFilled = trades.stream().mapToInt(Trade::getMatchedQuantity).sum();
         assertEquals(order.getQuantity(), totalFilled, "Trade 수량 합은 원래 주문수량과 같아야 한다");
+
+        // 지정가 50,000원으로 예약해둔 금액 중 실제 체결가와의 차액만 원자적 UPDATE(addSeed)로 환급
+        verify(memberRepository).addSeed(MEMBER_ID, (50_000 - 49_000) * 4);
+        verify(memberRepository).addSeed(MEMBER_ID, (50_000 - 49_500) * 6);
     }
 
     @Test
@@ -164,7 +165,6 @@ class MatchingServiceTest {
     void 호가_잔량이_부족하면_일부만_체결되고_나머지는_미체결로_남는다() {
         Order order = newBuyOrder(10, 50_000);
         when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         // 지정가(50,000) 이하 매도호가 잔량이 3주뿐 -> 10주 중 3주만 체결 가능
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
@@ -205,7 +205,6 @@ class MatchingServiceTest {
         // 지정가 100,000원 매수 10주. 매도호가 1단계는 96,000원(4% 저렴, 밴드 내) 5주, 2단계는 90,000원(10% 저렴, 밴드 밖) 5주.
         Order order = newBuyOrder(10, 100_000);
         when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
                 .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
@@ -228,7 +227,6 @@ class MatchingServiceTest {
         Order order = newBuyOrder(10, 100_000);
         order.setAutoPriceImprovement(false);
         when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
                 .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
@@ -246,7 +244,6 @@ class MatchingServiceTest {
         Order order = newBuyOrder(10, 100_000);
         order.setPriceMode(PriceMode.MARKET);
         when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
                 .thenReturn(askingPriceWithTwoLevels("96000", "5", "90000", "5"));
@@ -274,7 +271,6 @@ class MatchingServiceTest {
 
         when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
         when(orderRepository.findAllById(any())).thenReturn(List.of(lowPriceOrder, highPriceOrder));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
         // 매도호가 물량이 5주뿐이라 두 주문(각 10주)이 경쟁하는 상황 - 둘 다 이 가격대엔 체결 자격이 있음(5% 밴드 안)
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
                 .thenReturn(askingPriceWith("50000", "5"));
@@ -292,7 +288,6 @@ class MatchingServiceTest {
         // 매도호가 잔량 5주뿐인 "한 장의 스냅샷"(같은 AskingPriceDTO 객체)을 두 주문이 순서대로 조회
         AskingPriceDTO sameTick = askingPriceWith("49000", "5");
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(sameTick);
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         Order first = newBuyOrder(10, 50_000);
         first.setOrderId(1L);
@@ -325,7 +320,6 @@ class MatchingServiceTest {
         AskingPriceDTO sharedTick = askingPriceWith("49000", String.valueOf(askVolume)); // 5명 모두 같은 스냅샷(같은 객체)을 봄
 
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(sharedTick);
-        when(memberRepository.findByMemberId(any())).thenAnswer(inv -> Optional.of(newMember()));
 
         List<Order> orders = new ArrayList<>();
         for (int i = 1; i <= userCount; i++) {
@@ -387,7 +381,6 @@ class MatchingServiceTest {
 
         when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
         when(orderRepository.findAllById(any())).thenReturn(List.of(cancelledOrder, stillPendingOrder));
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
         // 두 주문 다 체결 자격이 있는 호가(물량도 충분) - 취소되지 않았다면 cancelledOrder도 체결됐을 상황
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE))
                 .thenReturn(askingPriceWith("49000", "20"));
@@ -413,7 +406,6 @@ class MatchingServiceTest {
         // 체결 가능한 호가가 있는 상황 - 상태 확인이 없으면 취소된 주문도 그대로 체결된다.
         // 수정 후엔 상태 확인에서 먼저 빠져나가 호가/회원을 조회하지 않으므로 lenient
         lenient().when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenReturn(askingPriceWith("49000", "10"));
-        lenient().when(memberRepository.findByMemberId(MEMBER_ID)).thenReturn(Optional.of(newMember()));
 
         matchingService.tryMatch(message);
 
@@ -428,12 +420,16 @@ class MatchingServiceTest {
         // DB를 흉내냄: 조회할 때마다 현재 저장된 상태의 복사본(별도 엔티티 인스턴스)을 돌려주고, save하면 그 상태를 덮어쓴다
         AtomicReference<Order> db = new AtomicReference<>(newBuyOrder(10, 50_000));
         when(orderRepository.findById(ORDER_ID)).thenAnswer(inv -> Optional.of(copyOf(db.get())));
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
+        lenient().when(orderRepository.save(any(Order.class))).thenAnswer(inv -> { // 체결 실패(호가 없음) 경로용
             Order saved = inv.getArgument(0);
             db.set(copyOf(saved));
             return saved;
         });
-        when(memberRepository.findByMemberId(MEMBER_ID)).thenAnswer(inv -> Optional.of(newMember()));
+        when(orderRepository.saveAndFlush(any(Order.class))).thenAnswer(inv -> {
+            Order saved = inv.getArgument(0);
+            db.set(copyOf(saved));
+            return saved;
+        });
         when(orderRepository.findPendingStockList(any())).thenReturn(List.of(STOCK_CODE));
         // 매 호출마다 새 틱 - 같은 틱 잔량 공유(6·7번 테스트)가 아니라 순수하게 주문 상태 재확인만 검증하기 위함
         when(kisWebSocketService.getCachedAskingPrice(STOCK_CODE)).thenAnswer(inv -> askingPriceWith("49000", "100"));

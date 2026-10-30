@@ -7,8 +7,13 @@ import org.mockito.AdditionalAnswers;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.context.annotation.Import;
+import stockOrder.stockTrade.support.MySqlContainerConfig;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import stockOrder.stockTrade.admin.AdminAlertService;
 import stockOrder.stockTrade.fds.FraudDetectionService;
 import stockOrder.stockTrade.kis.AskingPriceDTO;
@@ -35,7 +40,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/* MatchingService + 실제 JPA 리포지토리 + 실제 DB(H2 인메모리, @DataJpaTest가 ~/stockTrade 파일 DB 대신 띄움) 통합 테스트.
+/* MatchingService + 실제 JPA 리포지토리 + 실제 DB(MySQL 8.4 Testcontainers 컨테이너) 통합 테스트.
    외부 연동(KIS 시세/웹소켓, FDS, 어드민 알림, 매매차익 캐시)만 Mock으로 대체한다.
 
    유닛 테스트(MatchingServiceTest)는 "DB에서 읽을 때마다 별도 엔티티가 나온다"를 가짜 DB로 흉내냈는데,
@@ -45,6 +50,8 @@ import static org.mockito.Mockito.when;
    각자 커밋되게 해서, 다른 스레드(즉시체결)가 배치가 커밋한 결과를 실제로 볼 수 있게 하기 위함.
    그래서 롤백이 안 되므로 @BeforeEach에서 직접 비운다. */
 @DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE) // 내장 H2로 바꾸지 말고 아래 MySQL 컨테이너 사용
+@Import(MySqlContainerConfig.class)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class MatchingServiceIntegrationTest {
 
@@ -59,6 +66,7 @@ class MatchingServiceIntegrationTest {
     @Autowired private OrderRepository realOrderRepository;
     @Autowired private TradeRepository tradeRepository;
     @Autowired private MemberRepository memberRepository;
+    @Autowired private PlatformTransactionManager transactionManager;
 
     private OrderRepository orderRepository; // 실제 리포지토리에 위임하되, 특정 시점에 끼어들 수 있게 감싼 것
     private KisWebSocketService kisWebSocketService;
@@ -79,7 +87,8 @@ class MatchingServiceIntegrationTest {
 
         matchingService = new MatchingService(orderRepository, tradeRepository, memberRepository,
                 kisService, kisWebSocketService, mock(RealizedPnlService.class),
-                mock(AdminAlertService.class), mock(FraudDetectionService.class));
+                mock(AdminAlertService.class), mock(FraudDetectionService.class),
+                new TransactionTemplate(transactionManager));
 
         Member member = new Member();
         member.setMemberId(MEMBER_ID);

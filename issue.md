@@ -684,3 +684,167 @@ Kafka 브로커까지 띄운 end-to-end 재현은 하지 않음 — 버그가 Ka
 
 - **사용자 취소(`OrderController.cancelOrder`)와 체결의 경쟁**: `cancelOrder`는 종목 락(`ConsumptionState`)을 잡지 않고 주문을 읽고 → 환급 → `CANCELLED` 저장을 함. 체결(`execute`)이 락 안에서 진행되는 도중에 취소가 끼어들면, 둘 중 나중에 저장한 쪽이 상태를 덮어써서 "체결됐는데 환급도 된" 상태가 가능할 것으로 보임 — 코드 구조로만 판단했고 재현 테스트는 아직 없음. 해결 방향 후보는 `Order`에 `@Version`(낙관적 락)을 두거나, 취소도 같은 종목 락을 거치게 하는 것.
 - 이번 수정은 **단일 인스턴스 안에서** 두 경로의 순서를 맞춘 것뿐임. 인스턴스를 2대 이상 띄우면 `synchronized`와 메모리의 `OrderBook`/`ConsumptionState`가 인스턴스 간에 공유되지 않아 같은 문제가 인스턴스 사이에서 다시 생김 — 종목코드 기준 파티셔닝(단일 writer) 구조로 바꾸는 작업에서 다룰 부분.
+
+---
+
+# Issue: 잔고·보유수량 동시 주문 lost update + 사용자 취소와 체결의 경쟁 - 회원 행 비관적 락 + 잔고 원자적 UPDATE + 주문 낙관적 락(@Version)으로 해결
+
+## 발견 경위
+
+2026-10-29 즉시체결 이중 체결 버그(위 이슈)를 고친 뒤, 토스 러너스하이 지원용 개선 리스트를 코드와 대조하면서 같이 찾은 것. 둘 다 실제 운영에서 관측된 증상이 아니라 코드 리뷰로 찾았고, 이번에 통합 테스트로 실제 재현함 (2026-10-30).
+
+- 주문 접수(`OrderController.submitOrder`)가 잔고/보유수량을 "읽고 → 확인 → 쓰기"로 처리하는데 락이 없었음.
+- 사용자 취소(`OrderController.cancelOrder`)가 종목 락도 버전 확인도 없이 주문을 읽고 → 환급 → `CANCELLED` 저장을 했음. 체결은 종목 락 안에서 돌지만 취소는 그 락을 안 거침.
+
+## 문제
+
+**1. 같은 회원의 동시 주문이 잔고/보유수량을 넘어서 접수됨**
+- 매수: 두 요청이 같은 잔고(예: 100만원)를 동시에 읽으면 둘 다 "잔고 충분"으로 통과 → 각자 `잔고 - 주문금액`을 저장 → 나중 저장이 앞의 차감을 덮어씀.
+- 매도: 보유수량 - 대기 매도수량 확인이 다른 테이블 합계 조회라, 동시에 들어오면 서로의 주문을 못 보고 둘 다 통과.
+
+**2. 잔고 증감끼리 서로 덮어씀 (lost update)**
+체결 차액 환급(`MatchingService.updateSeed`), 사용자 취소 환급, 장마감 취소 환급, 주문 접수 차감이 전부 "회원 엔티티를 읽어서 `setSeed` 후 저장"이라, 동시에 일어나면 한쪽 변경이 사라짐.
+
+**3. 취소와 체결이 같은 주문을 동시에 처리**
+- 취소가 주문을 읽은 뒤 체결이 먼저 커밋되면, 취소가 오래된 상태(`PENDING`)로 미체결분 전액을 환급하고 `CANCELLED`로 덮어씀 → **체결도 되고(Trade 존재) 환급도 된** 상태.
+- 체결(배치)이 주문을 읽은 뒤 취소가 먼저 커밋되면, 체결이 취소된 주문을 그대로 체결하고 `MATCHED`로 되살림.
+- 추가로 체결 자체(`execute`)도 Trade 저장 / 주문 저장 / 잔고 정산이 각자 따로 커밋돼서, 중간에 실패하면 반쪽만 남을 수 있었음.
+
+## 해결 방식 선택 (검토한 대안)
+
+| 문제 | 검토한 방법 | 선택 | 이유 |
+|---|---|---|---|
+| 동시 주문 접수 | ① 조건부 UPDATE(`seed = seed - :cost WHERE seed >= :cost`) ② 회원 행 비관적 락 ③ 낙관적 락 + 재시도 | **② 비관적 락** | ①은 매수 잔고엔 깔끔하지만 매도의 "보유수량 - 대기 매도수량"(다른 테이블 합계)은 한 줄 UPDATE 조건으로 표현이 안 됨. 같은 회원의 주문은 경합 범위가 그 회원 한 명뿐이라 락 대기 비용이 작고, 충돌 시 재시도 로직이 필요한 ③보다 단순 |
+| 잔고 증감 | ① 비관적 락 ② 원자적 UPDATE(`seed = seed + delta`) | **② 원자적 UPDATE** | 환급은 조건 확인 없이 더하기만 하면 되므로 읽을 필요 자체가 없음 |
+| 취소 vs 체결 | ① 취소도 종목 락(`synchronized`)을 거치게 ② 주문 낙관적 락(`@Version`) | **② @Version** | ①은 서버 한 대 안에서만 유효(다음 과제인 다중 서버 구조에서 다시 깨짐). @Version은 DB가 판정하므로 서버 대수와 무관하고, 충돌이 드물어서 실패한 쪽만 롤백하면 됨 |
+
+## 구현
+
+- `MemberRepository.findByMemberIdForUpdate` — `@Lock(PESSIMISTIC_WRITE)` (`SELECT ... FOR UPDATE`).
+- `MemberRepository.addSeed(memberId, delta)` — `UPDATE Member SET seed = seed + :delta` 원자적 증감. 체결 환급, 사용자 취소 환급, 장마감 취소 환급이 전부 이걸 쓰도록 변경.
+- `Order.version` — `@Version`. 기존 행이 null이면 Spring Data가 새 엔티티로 오인해 INSERT를 시도하므로 `columnDefinition = "bigint default 0"`으로 컬럼 추가 시 0으로 채움.
+- 신규 `OrderCommandService` — 주문 접수(`submit`: 회원 행 락 → 잔고/보유수량 확인 → 예약 → 주문 저장)와 취소(`cancel`)를 트랜잭션으로 처리. 취소는 `saveAndFlush`로 버전 충돌을 메서드 안에서 확인하고, 충돌이면 `setRollbackOnly()` 후 `CONFLICT` 반환 → 컨트롤러가 409로 "잠시 후 다시 시도" 응답.
+- `OrderController` — 메서드의 `@Transactional`을 없애고 `OrderCommandService`를 호출. 부수 효과로 **OrderBook 등록과 Kafka 발행이 DB 커밋 이후에 실행**됨(예전엔 트랜잭션 안이라 커밋 전에 컨슈머가 메시지를 읽을 수 있었음 - 이중 쓰기 문제 중 "커밋 전 소비"가 해소됨. 발행 실패 시 재발행 보장은 아직 없음).
+- `OrderCommandService.submit`이 요청 바디의 `orderId`/`version`/`matchedQuantity`를 무시하도록 함 — 예전엔 클라이언트가 `orderId`를 채워 보내면 `save`가 기존 주문을 덮어쓰는(merge) 경로를 탈 수 있었음(이번에 같이 발견, 재현은 안 함).
+- `MatchingService.execute` — 주문 저장 / Trade 저장 / 잔고 정산을 `TransactionTemplate`으로 한 트랜잭션에 묶음. 버전 충돌(`OptimisticLockingFailureException`)이면 체결 전체 롤백 후 로그만 남김(어드민 `SYSTEM_ERROR` 알림 대상 아님 - 정상적인 경합 결과).
+- **락 순서 통일(데드락 방지)**: 체결 트랜잭션은 주문 행 → 회원 행 순서로 갱신하는데, 취소가 회원(환급) → 주문 순서면 서로의 행을 기다리는 데드락이 가능함. 그래서 취소/장마감 취소/체결 모두 **주문 행을 먼저 `saveAndFlush`** 하고 잔고를 나중에 갱신하도록 맞춤(`save`만 하면 실제 UPDATE가 커밋 시점으로 밀려서 순서가 뒤집힘).
+
+## 검증
+
+신규 `OrderConcurrencyIntegrationTest` (`@DataJpaTest`, 실제 Hibernate + H2 인메모리, 트랜잭션 프록시까지 운영과 동일하게 적용) 5건:
+
+1. 동시 매수 — 잔고 100만원으로 50만원 매수 5건 동시 → 2건만 접수, 잔고 0원
+2. 동시 매도 — 보유 10주로 5주 매도 5건 동시 → 2건만 접수
+3. 잔고 증감 동시 실행 — 취소 환급 5건(+50만원씩) + 신규 매수 5건(-10만원씩) 동시 → 잔고 정확히 일치
+4. 취소가 읽은 뒤 체결이 먼저 커밋 → 취소 `CONFLICT`·롤백, 주문 `MATCHED`, 취소 환급 없음
+5. 배치가 읽은 뒤 취소가 먼저 커밋 → 체결 롤백, 주문 `CANCELLED`, Trade 0건, 잔고는 취소 환급만 반영
+
+테스트가 실제로 버그를 잡는지 확인하기 위해 수정 하나씩만 빼고 실행:
+
+| 테스트 | 회원 행 락(`@Lock`) 제거 시 | `@Version` 제거 시 | 수정 후 |
+|---|---|---|---|
+| 1. 동시 매수 | **실패** - 5건 전부 접수(기대 2건) | 통과 | 통과 |
+| 2. 동시 매도 | **실패** - 5건 전부 접수(기대 2건) | 통과 | 통과 |
+| 3. 잔고 증감 동시 | **실패** - 잔고 3,000,000원이어야 하는데 1,900,000원(110만원 유실) | 통과 | 통과 |
+| 4. 취소 후 체결 커밋 | 통과 | **실패** - 취소가 `OK`로 성공(체결+환급 동시 발생) | 통과 |
+| 5. 체결 후 취소 커밋 | 통과 | **실패** - 취소된 주문이 `MATCHED`로 되살아남 | 통과 |
+
+- 기존 테스트도 새 구조에 맞게 수정(`updateSeed`가 `addSeed`를 호출하는지 검증 추가). 전체 30건 통과 — `MatchingServiceTest` 13, `MatchingServiceIntegrationTest` 3, `OrderConcurrencyIntegrationTest` 5, `FraudDetectionServiceTest` 8, `StockTradeApplicationTests` 1.
+- 전체 테스트를 연속 3회 돌렸을 때 2·3회차에 `StockTradeApplicationTests`(contextLoads)만 실패함 — 원인은 앱 기동 시 `KisService`가 실제 KIS 토큰 API를 호출하는데 응답에 토큰 필드가 없어서(연속 실행으로 KIS 토큰 발급 제한에 걸린 것으로 보임). 이번 변경과 무관하고, 테스트가 실제 외부 API·실제 DB(`~/stockTrade`)를 쓰는 기존 문제(개선 리스트 6번)에서 다룰 부분.
+
+## 남은 것
+
+- 버전 충돌로 체결이 롤백되면 `computeFill`이 깎아둔 그 틱의 로컬 호가 잔량은 복구하지 않음 — 다음 틱에 원본으로 리셋되고 "덜 체결되는" 방향이라 정합성 문제는 없음.
+- `markUnmatched`(미체결 사유 일괄 기록)도 `@Version` 대상이라 취소와 겹치면 충돌 예외가 날 수 있음 — 배치 루프의 catch 안에서 호출되는 경로는 예외가 루프 밖으로 나갈 수 있어 확인 필요.
+- 운영 DB(H2 파일)에는 앱 기동 시 `ddl-auto: update`로 `orders.version` 컬럼이 기본값 0으로 추가됨 — 실제 배포 DB에서 확인 필요.
+
+---
+
+# 개선: 테스트가 운영 DB·실제 KIS API를 쓰던 문제 + 로컬/테스트 DB를 MySQL로 전환 (Testcontainers)
+
+## 배경
+
+- `StockTradeApplicationTests`(contextLoads)가 `@SpringBootTest`로 앱 전체를 띄우면서 **운영과 같은 H2 파일 DB(`~/stockTrade`)를 그대로 열고**, 기동 시 `KisService`가 **실제 KIS 토큰 API를 호출**하고, 30초 매칭 스케줄러까지 돌았음. `./gradlew build`만 해도 로컬의 실제 주문 데이터를 건드릴 수 있는 구조.
+- 2026-10-30 전체 테스트를 연속 3회 돌렸더니 2·3회차에 contextLoads만 실패 — 원인은 KIS 토큰 응답에 토큰 필드가 없음(연속 실행으로 KIS 토큰 발급 제한에 걸린 것으로 보임). 외부 API 상태에 따라 테스트 결과가 바뀌는 플레이키 테스트였음.
+- 동시성 통합 테스트(`OrderConcurrencyIntegrationTest`, `MatchingServiceIntegrationTest`)는 H2 인메모리에서 돌았는데, 다중 서버 구조로 가면 운영 DB는 MySQL이 될 예정이라 **실제 대상 DB(InnoDB)의 락·격리수준 동작으로 검증**해야 의미가 있음. H2 파일 DB는 프로세스 하나만 열 수 있어서 서버 2대 구성 자체가 불가능하기도 함.
+
+## 변경
+
+- 의존성: `mysql-connector-j`(runtime), `spring-boot-testcontainers` + `testcontainers-mysql` + `testcontainers-junit-jupiter`(test). Spring Boot 4.0.5 BOM 기준 Testcontainers 2.0.4.
+- `support/MySqlContainerConfig` — `mysql:8.4` 컨테이너를 `@ServiceConnection`으로 등록하는 테스트 설정. 통합 테스트 3개 클래스가 `@Import`해서 공유(Spring 테스트 컨텍스트 캐시로 같은 설정끼리는 컨테이너 재사용).
+- `@DataJpaTest` 2개 클래스: `@AutoConfigureTestDatabase(replace = NONE)` + MySQL 컨테이너 사용.
+- `StockTradeApplicationTests`: MySQL 컨테이너 + `KisService`/`KisWebSocketService` `@MockitoBean` + `spring.kafka.listener.auto-startup=false` + 외부 API 키 더미 값 + `spring.config.import=`(로컬 `application-secret.yaml`을 안 읽음). 외부 연동 없이 기동만 확인.
+- 로컬 실행용 `mysql` 프로파일(`application-mysql.yml`)과 저장소 루트 `docker-compose.yml`(MySQL 8.4). 이 PC에서는 3306을 직접 설치된 MySQL(`mysqld`)이 쓰고 있어서 호스트 포트 3307로 노출. 기본/운영(`prod`) 프로파일은 그대로 H2 — 운영 전환은 다중 서버 구조 검증 후 별도로.
+
+## 검증
+
+- `mysql` 프로파일로 앱 기동 확인: MySQL 8.4.11에 접속, `members`/`orders`/`stock`/`stock_seq`/`trades` 테이블 생성, `orders.version`이 `bigint default 0`으로 생성됨, `Started StockTradeApplication` 확인 후 종료.
+- 통합 테스트가 실제로 MySQL 컨테이너로 도는 것 확인(테스트 로그의 `jdbc:mysql://localhost:<임의포트>/test`). contextLoads 로그에 KIS 도메인 호출 0건.
+- 위 "잔고·보유수량 동시 주문 / 취소 vs 체결" 이슈의 "수정 하나씩 빼고 실행" 검증을 MySQL에서 다시 함 — 결과 패턴은 H2와 동일(회원 행 락 제거 시 1·2·3번 실패, `@Version` 제거 시 4·5번 실패). 3번(잔고 증감 동시)의 유실액만 H2 1,100,000원 → **MySQL 2,100,000원**으로 더 컸음(락 없이 읽고-쓰기 할 때 어떤 갱신이 덮이는지는 DB와 스레드 타이밍에 따라 달라짐 — 두 DB 모두에서 유실이 재현됐다는 게 핵심).
+- 전체 테스트 30건을 연속 3회 실행 → 3회 모두 전부 통과(이전에 2·3회차 실패하던 contextLoads 포함).
+
+## 주의
+
+- 이제 `./gradlew test`/`./gradlew build`는 **Docker가 실행 중이어야** 한다(CLAUDE.md에도 반영).
+
+---
+
+# 개선: 주문 메시지 유실·중복·실패 처리 - Transactional Outbox + 멱등 컨슈머 + 재시도/DLQ/재발행 (+ H2 제거, MySQL 기본 전환)
+
+## 배경 (기존 구조의 문제)
+
+1. **DB와 Kafka 이중 쓰기**: 주문 저장(DB)과 Kafka 발행이 따로였음. 발행 실패는 `log.error`만 남기고 끝나서 메시지가 사라졌고(즉시체결 기회 상실 - 30초 배치만 기다림), 예전엔 발행이 트랜잭션 안(커밋 전)이라 컨슈머가 커밋 전 주문을 읽을 수도 있었음(앞 이슈에서 커밋 뒤로 옮김).
+2. **컨슈머가 실패를 삼킴**: `processOrder`가 모든 예외를 `catch`해서 `log.info`만 남김 → 재시도도 없고, 실패한 메시지가 어디에도 남지 않아 나중에 확인·재처리할 방법이 없었음.
+3. **중복 메시지 대비 없음**: 위 1을 고치려면 "최소 한 번" 발행(재시도)이 필요한데, 그러면 같은 메시지가 두 번 올 수 있음.
+
+## 설계
+
+### 1) Transactional Outbox
+- 주문 접수 트랜잭션(`OrderCommandService.submit`) 안에서 주문 저장과 함께 `outbox_events`에 "보낼 메시지"를 INSERT → 둘이 같이 커밋되거나 같이 롤백.
+- `OutboxRelay`가 커밋 이후 발행: ① **즉시 발행** - 접수 응답 직전에 요청 스레드가 바로 발행(즉시체결 지연 최소화) ② **주기 발행** - 1초마다 1초 이상 밀린 미발행 이벤트 재시도(즉시 발행 실패, 그 사이 서버 종료 대비). 실패하면 `attempts`/`lastError` 기록.
+- 같은 이벤트를 두 경로(또는 서버 여러 대)가 동시에 발행하는 것을 **행 락(`SELECT ... FOR UPDATE`)** 으로 막음 - 락을 잡은 채 Kafka ack까지 기다린 뒤 `publishedAt` 기록, 뒤에 온 쪽은 커밋을 기다렸다가 이미 발행된 걸 보고 빠짐.
+
+검토한 대안:
+| 방법 | 판단 |
+|---|---|
+| 기존처럼 커밋 후 바로 send, 실패 시 로그 | 유실 그대로 - 기각 |
+| CDC(Debezium)로 outbox 테이블 binlog 읽기 | 폴링 지연 없고 표준적이지만, Kafka Connect + Debezium 인프라가 추가로 필요 - 이 규모에서 과함. 서버 여러 대로 갈 때 재검토 후보 |
+| **폴링 릴레이 + 즉시 발행** | 추가 인프라 없음. 평소엔 즉시 발행이라 지연 거의 없고, 실패 시에만 최대 1~2초 지연 - **선택** |
+| 행 락 대신 `SKIP LOCKED` | 여러 릴레이가 서로 기다리지 않아 처리량엔 유리하지만, 지금은 이벤트 하나당 락 범위가 행 하나뿐이고 전송 타임아웃(5초)으로 상한이 있어 단순한 쪽 선택. 다중 서버 부하 측정 후 재검토 |
+
+트레이드오프: 행 락을 잡은 채 네트워크 호출(Kafka 전송)을 함 → 브로커가 느려지면 그 이벤트의 DB 행 락도 길어짐(최대 5초). 대신 "같은 이벤트 이중 발행"을 DB 락 하나로 막을 수 있음.
+
+### 2) 멱등 컨슈머 - 중복 메시지가 와도 결과가 한 번만 반영되게
+별도 "처리한 메시지 ID" 테이블 대신, **주문ID를 자연 키로 쓰는 기존 장치 + 호가창 등록 멱등화**로 충분하다고 판단:
+- 즉시체결(`tryMatch`)은 락 안에서 주문 상태를 다시 읽어 이미 체결/취소면 건너뜀(10/29 이슈), 체결 저장은 `Order @Version`으로 한 번만 성공(10/30 이슈).
+- **신규**: `OrderBook`에 큐에 있는 주문ID 집합을 두고 같은 주문은 한 번만 등록(`offer`/`requeue` 멱등). 다음 과제(서버 여러 대)에서 호가창 등록이 컨슈머 쪽으로 옮겨가면 중복 메시지 = 중복 등록이 되기 때문에 미리 막음. 같은 주문이 큐에 두 개 있으면 한 배치 회차에 같은 주문을 두 번 체결 시도하게 됨.
+
+### 3) 재시도 + DLQ + 재발행
+- 컨슈머는 예외를 삼키지 않고 던짐 → `OrderKafkaConfig`의 `DefaultErrorHandler`가 1초 간격 2번 재시도(총 3번) 후 `DeadLetterPublishingRecoverer`로 `stock-order.DLT`에 보냄. JSON 파싱 실패(`JacksonException`)처럼 다시 해도 똑같이 실패할 예외는 재시도 없이 바로 DLT.
+- DLT 토픽은 브로커 자동 생성에 기대지 않고 앱 기동 시 `NewTopic` 빈으로 생성(KafkaAdmin). DLT는 파티션 1개라 원본 파티션 번호 대신 항상 0번으로 보내도록 지정(원본이 여러 파티션이면 기본 동작은 없는 파티션으로 보내려다 실패).
+- `DeadLetterService`가 DLT를 구독해 `dead_letters` 테이블에 원본 토픽·키·내용·실패 원인을 적재하고 어드민 SSE 알림 발송.
+- 어드민 API: `GET /api/admin/dead-letters`(미처리 목록), `POST /api/admin/dead-letters/{id}/replay`(원래 토픽으로 재발행, 이미 재발행한 건 거부).
+
+### 4) H2 제거, MySQL 기본 전환
+운영 배포는 하지 않기로 해서(2026-10-30) 기본 설정의 DB를 MySQL(docker-compose, 3307)로 바꾸고 H2 의존성(`h2`, `spring-boot-h2console`)과 `/h2-console` 허용 경로를 뺌. `mysql` 프로파일은 기본과 같아져서 삭제. 기존 `~/stockTrade.mv.db`는 지우지 않고 남겨둠(데이터 이전 안 함).
+
+## 검증
+
+| 테스트 | 내용 | 수정 전 동작으로 되돌렸을 때 |
+|---|---|---|
+| `OutboxIntegrationTest` 1 | 주문과 Outbox 이벤트가 같이 저장, 잔고 부족 거절 시 둘 다 없음 | - |
+| `OutboxIntegrationTest` 2 | Outbox 기록 실패 시 주문·잔고 예약도 롤백 | - |
+| `OutboxIntegrationTest` 3 | Kafka 전송 실패 → 미발행·`attempts=1`로 남음 → 재시도에서 발행, 이미 발행된 건 재전송 안 함 | (예전 코드는 실패 시 로그만 남기고 재시도 경로 자체가 없음) |
+| `OutboxIntegrationTest` 4 | 같은 이벤트를 5개 스레드가 동시에 발행 → 전송 1번 | 릴레이 행 락 제거 시 **실패 - 5번 전송** |
+| `OrderBookTest` 2건 | 같은 주문 3번 등록 → 1번만 꺼내짐 / 꺼낸 뒤 재등록과 중복 메시지가 겹쳐도 1번 | 중복 방지 제거 시 **둘 다 실패** |
+| `KafkaDeadLetterIntegrationTest` 1 (실제 Kafka 컨테이너) | JSON이 아닌 메시지 → 재시도 없이 DLT → DB 적재, 매칭 호출 0번 | 예전 컨슈머(예외 삼킴)로 되돌리면 **실패 - 60초 안에 DLQ 적재 안 됨** |
+| `KafkaDeadLetterIntegrationTest` 2 (실제 Kafka 컨테이너) | 처리 중 예외 계속 → 정확히 3번 시도 후 DLT, 실패 원인 기록 → 재발행 → 다시 처리, 재발행 2번째는 거부 | 예전 컨슈머로 되돌리면 **실패** |
+
+- 전체 38건 통과(통합 테스트는 MySQL 8.4·Kafka 3.8 컨테이너).
+- 실제 앱 기동(기본 설정 = MySQL + 로컬 Kafka)으로 끝까지 확인: 회원가입 → 로그인 → 매수 주문(`{"orderId":1}`) → `outbox_events`에 `published=1, attempts=0`(즉시 발행 성공) → 컨슈머 `[Kafka] 주문 수신: 1` → `tryMatch` 실행(장 마감 시간이라 대기) → 잔고 10,000,000 → 9,950,000. DLT 토픽(`stock-order.DLT-0`)이 기동 시 생성돼 DLT 컨슈머에 할당된 것도 로그로 확인. 확인 후 테스트 데이터 삭제.
+
+## 남은 것 / 한계
+
+- 즉시 발행이 실패한 이벤트는 주기 발행이 1초마다 계속 재시도함(백오프·최대 시도 횟수 없음). 브로커가 오래 죽어 있으면 경고 로그가 계속 쌓임 — `attempts` 기준 백오프는 다음 후보.
+- Kafka 메시지 키가 아직 `orderId` → 같은 종목 주문의 처리 순서 보장 없음. 다음 과제(종목 파티션 단위 단일 writer)에서 `stockCode`로 변경 예정.
+- `dead_letters` 확인용 어드민 화면은 없음(API만).
