@@ -1,6 +1,5 @@
 package stockOrder.stockTrade.matching;
 
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Sinks;
 import stockOrder.stockTrade.admin.AdminAlert;
 import stockOrder.stockTrade.admin.AdminAlertService;
 import stockOrder.stockTrade.fds.FraudDetectionService;
@@ -31,6 +29,9 @@ import stockOrder.stockTrade.order.UnmatchReason;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,7 +52,8 @@ public class MatchingService {
     private final AdminAlertService adminAlertService;
     private final FraudDetectionService fraudDetectionService;
     private final TransactionTemplate transactionTemplate;
-    private final Sinks.Many<Order> orderResultSink = Sinks.many().multicast().onBackpressureBuffer();
+    private final StockOwnership ownership;
+    private final OrderResultBroadcaster orderResultBroadcaster;
 
     // cancelForMarketClose를 같은 클래스 안에서 직접 호출하면 @Transactional 프록시를 안 거쳐서 트랜잭션이 안 걸림 -
     // KisService/KisWebSocketService 사이에 쓰던 것과 같은 @Autowired+@Lazy 자기주입 패턴으로 프록시를 통해 호출되게 함
@@ -98,16 +100,45 @@ public class MatchingService {
         return isBuy ? state.askLevels : state.bidLevels;
     }
 
-    /* 앱 재시작 시 메모리상의 OrderBook은 비어있으므로, DB에 남아있는 대기(PENDING/PARTIAL) 주문으로
-       다시 채워준다 - OrderBook은 DB 위에 얹은 성능 최적화 계층일 뿐, 진실의 원천은 항상 DB다. */
-    @PostConstruct
-    public void rebuildOrderBooksFromDb() {
-        List<Order> pending = orderRepository.findByOrderStatusIn(List.of(OrderStatus.PENDING, OrderStatus.PARTIAL));
+    /* stock-order 파티션을 새로 맡게 됐을 때(기동, 리밸런스) - 그 파티션 종목의 대기 주문을 DB에서 읽어 호가창을 채운다.
+       예전엔 @PostConstruct로 기동 시 전체 대기 주문을 올렸지만, 이제 서버마다 맡은 종목이 다르고 리밸런스로 바뀌기도 해서
+       파티션을 받는 시점에 그 몫만 올린다. OrderBook은 DB 위에 얹은 성능 최적화 계층일 뿐, 진실의 원천은 항상 DB다. */
+    public void onPartitionsAssigned(Collection<Integer> partitions, int topicPartitionCount) {
+        ownership.assign(partitions, topicPartitionCount);
+        List<Order> pending = orderRepository.findByOrderStatusIn(List.of(OrderStatus.PENDING, OrderStatus.PARTIAL)).stream()
+                .filter(o -> partitions.contains(ownership.partitionOf(o.getStockCode())))
+                .toList();
         pending.forEach(this::registerOrder);
-        log.info("[MatchingService] 재시작 - 대기 주문 {}건으로 호가창(OrderBook) 재구성", pending.size());
+        log.info("[MatchingService] 파티션 {} 할당(전체 {}개) - 대기 주문 {}건으로 호가창 구성", partitions, topicPartitionCount, pending.size());
     }
 
-    /* 새 주문이 생성되면(OrderController.submitOrder) 호출 - 해당 종목의 호가창에 매수/매도 큐로 등록한다. */
+    /* 파티션을 다른 서버로 넘길 때(리밸런스, 종료) - 넘겨받는 서버가 체결을 시작하기 전에 여기서 손을 떼야 한다.
+       1) 소유권부터 내려놓아서 새 체결이 시작되지 않게 하고(체결 경로는 종목 락 안에서 소유권을 다시 확인함)
+       2) 종목 락을 한 번씩 잡아서, 이미 진행 중이던 체결(30초 배치 스레드)이 끝날 때까지 기다린 뒤
+       3) 그 종목의 호가창·로컬 호가 잔량 상태를 버린다.
+       Kafka는 이 콜백이 끝나야 파티션을 다른 서버에 할당하므로, 두 서버가 같은 종목을 동시에 체결하는 구간이 생기지 않는다.
+       (그래도 겹치는 경우가 생기면 Order @Version이 이중 체결을 막는 마지막 안전장치) */
+    public void onPartitionsRevoked(Collection<Integer> partitions) {
+        ownership.revoke(partitions);
+        Set<String> codes = new HashSet<>(orderBooks.keySet());
+        codes.addAll(consumptionByStock.keySet());
+        int released = 0;
+        for (String code : codes) {
+            if (!partitions.contains(ownership.partitionOf(code))) continue;
+            ConsumptionState state = consumptionByStock.get(code);
+            if (state != null) {
+                synchronized (state) {
+                    // 진행 중인 체결이 끝날 때까지 대기만 함
+                }
+            }
+            orderBooks.remove(code);
+            consumptionByStock.remove(code);
+            released++;
+        }
+        log.info("[MatchingService] 파티션 {} 반납 - 종목 {}개 호가창 정리", partitions, released);
+    }
+
+    /* 주문 메시지를 받으면(OrderService.processOrder) 호출 - 해당 종목의 호가창에 매수/매도 큐로 등록한다(같은 주문은 한 번만). */
     public void registerOrder(Order order) {
         OrderBook orderBook = orderBooks.computeIfAbsent(order.getStockCode(), k -> new OrderBook());
         if (order.getOrderType() == OrderType.BUY) {
@@ -126,10 +157,10 @@ public class MatchingService {
         }
         marketCloseCancelDone = false;
 
-        /* 대기 중인 종목 리스트 */
+        /* 대기 중인 종목 중 이 서버가 맡은 종목만 - 다른 종목은 그 파티션을 맡은 서버가 처리 */
         List<String> pendingStockCodeBuyList = orderRepository.findPendingStockList(
                 List.of(OrderStatus.PENDING, OrderStatus.PARTIAL)
-        );
+        ).stream().filter(ownership::owns).toList();
 
         if(pendingStockCodeBuyList.isEmpty()) return;
 
@@ -162,9 +193,10 @@ public class MatchingService {
     private void cancelPendingOrdersAtMarketClose() {
         if (marketCloseCancelDone) return;
 
+        // 이 서버가 맡은 종목의 대기 주문만 - 서버마다 자기 파티션 몫을 취소하면 전체가 한 번씩 처리됨
         List<Order> pendingOrders = orderRepository.findByOrderStatusIn(
                 List.of(OrderStatus.PENDING, OrderStatus.PARTIAL)
-        );
+        ).stream().filter(o -> ownership.owns(o.getStockCode())).toList();
 
         if (!pendingOrders.isEmpty()) {
             log.info("[MatchingService] 장마감 - 대기 주문 {}건 취소 처리 시작", pendingOrders.size());
@@ -200,7 +232,7 @@ public class MatchingService {
             }
         }
 
-        orderResultSink.tryEmitNext(order);
+        orderResultBroadcaster.publish(order);
         log.info("[MatchingService] 장마감 주문취소 {} / {}", order.getMemberId(), order.getOrderId());
     }
 
@@ -231,6 +263,7 @@ public class MatchingService {
     private void matchOrders(String pendingStockCode, AskingPriceDTO book) {
         ConsumptionState state = stateFor(pendingStockCode);
         synchronized (state) {
+            if (!ownership.owns(pendingStockCode)) return; // 락을 기다리는 사이 파티션이 다른 서버로 넘어감
             BookLevels askLevels = levelsFor(state, book, true);
             BookLevels bidLevels = levelsFor(state, book, false);
 
@@ -403,7 +436,7 @@ public class MatchingService {
                 return null;
             });
             realizedPnlService.invalidate(order.getMemberId()); // 새 체결이 생겼으니 보유종목/매매차익 캐시 갱신 필요
-            orderResultSink.tryEmitNext(order);
+            orderResultBroadcaster.publish(order);
             fraudDetectionService.checkOnExecute(order);
 
             log.info("[체결] {} {} {} {}주중 누적 {}주(이번 회차 {}주) @ {}원 -> {}",
@@ -457,8 +490,7 @@ public class MatchingService {
     }
 
     public Flux<Order> getOrderResultStream(String memberId) {
-        return orderResultSink.asFlux()
-                .filter(order -> order.getMemberId().equals(memberId));
+        return orderResultBroadcaster.stream(memberId);
     }
 
     /* Kafka로 주문이 들어온 직후 즉시 한 번 체결을 시도(빠른 주문) */
@@ -480,6 +512,10 @@ public class MatchingService {
             // 예전엔 락 밖에서 findById를 해서, 락을 기다리는 동안 배치(matchOrders)가 같은 주문을 이미 체결해도
             // 오래된(PENDING, 체결 0주) 객체로 execute를 한 번 더 돌려 이중 체결이 날 수 있었음.
             // 상태 확인도 없어서, 제출 후 Kafka 소비 전에 취소(환급 완료)된 주문까지 체결될 수 있었음.
+            if (!ownership.owns(stockCode)) {
+                log.info("[tryMatch] {} 담당 파티션이 아님(리밸런스로 넘어감) - 새 담당 서버가 처리", stockCode);
+                return;
+            }
             Order orderData = orderRepository.findById(order.getOrderId()).orElse(null);
 
             if (orderData == null) {

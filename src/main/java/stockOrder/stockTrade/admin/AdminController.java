@@ -3,10 +3,10 @@ package stockOrder.stockTrade.admin;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,7 +34,7 @@ public class AdminController {
     private final OrderRepository orderRepository;
     private final LokiClient lokiClient;
     private final AdminAlertService adminAlertService;
-    private final SessionRegistry sessionRegistry;
+    private final JdbcTemplate jdbcTemplate;
     private final DeadLetterService deadLetterService;
 
     @Value("${admin.member-id:}")
@@ -45,11 +45,13 @@ public class AdminController {
         return adminMemberId.equals(customerDetails.getMember().getMemberId());
     }
 
-    /* 현재 만료되지 않은 세션 총 개수 - 한 회원이 탭/기기를 여러 개 열어두면 그만큼 중복 집계됨 */
+    /* 현재 만료되지 않은 로그인 세션 총 개수 - 한 회원이 탭/기기를 여러 개 열어두면 그만큼 중복 집계됨.
+       세션이 서버 메모리가 아니라 MySQL(Spring Session JDBC)에 있으므로 서버 몇 대든 전체 기준으로 센다 */
     private int countActiveSessions() {
-        return sessionRegistry.getAllPrincipals().stream()
-                .mapToInt(principal -> sessionRegistry.getAllSessions(principal, false).size())
-                .sum();
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM SPRING_SESSION WHERE PRINCIPAL_NAME IS NOT NULL AND EXPIRY_TIME > ?",
+                Integer.class, System.currentTimeMillis());
+        return count == null ? 0 : count;
     }
 
     @GetMapping("/admin/orders")

@@ -41,18 +41,14 @@ public class TokenService {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        String body = response.body();
-        log.info("[TokenService] {}", body);
-
-        ObjectMapper objectMapper = new ObjectMapper();
-        JsonNode node = objectMapper.readTree(body);
-        String token = node.get("access_token").asText();
-
-        if(token == null || token.isEmpty()) {
-            throw new RuntimeException("token is empty: " + body);
+        // 응답 본문을 그대로 로그로 남기지 않는다 - 예전엔 log.info("[TokenService] {}", body)로 접근토큰 전체가
+        // 로그(그리고 Loki)에 남았음. 토큰은 24시간 동안 KIS API를 호출할 수 있는 자격증명이라 로그에 있으면 안 됨.
+        JsonNode node = new ObjectMapper().readTree(response.body());
+        JsonNode token = node.get("access_token");
+        if (token == null || token.asText().isEmpty()) {
+            throw new IllegalStateException("접근토큰 발급 실패 HTTP " + response.statusCode() + " " + errorOf(node));
         }
-
-        return token;
+        return token.asText();
     }
 
     /* 웹소켓 접속키 발급 - REST 접근토큰과 별개로 발급받아야 함 */
@@ -70,18 +66,22 @@ public class TokenService {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        String body = response.body();
-        log.info("[TokenService] {}", body);
-
-        ObjectMapper objectMapper = new ObjectMapper();
-        JsonNode node = objectMapper.readTree(body);
-        String approvalKey = node.get("approval_key").asText();
-
-        if(approvalKey == null || approvalKey.isEmpty()) {
-            throw new RuntimeException("approval_key is empty: " + body);
+        JsonNode node = new ObjectMapper().readTree(response.body());
+        JsonNode approvalKey = node.get("approval_key");
+        if (approvalKey == null || approvalKey.asText().isEmpty()) {
+            throw new IllegalStateException("웹소켓 승인키 발급 실패 HTTP " + response.statusCode() + " " + errorOf(node));
         }
+        return approvalKey.asText();
+    }
 
-        return approvalKey;
+    /* 실패 응답에서 원인만 추린다(성공 응답이 섞여도 토큰이 새지 않게 본문 전체는 안 씀) - KIS는 error_code/error_description 또는 msg_cd/msg1 */
+    private static String errorOf(JsonNode node) {
+        for (String[] pair : new String[][]{{"error_code", "error_description"}, {"msg_cd", "msg1"}}) {
+            if (node.hasNonNull(pair[0]) || node.hasNonNull(pair[1])) {
+                return node.path(pair[0]).asText() + " " + node.path(pair[1]).asText();
+            }
+        }
+        return "(응답에 오류 내용 없음)";
     }
 
 }

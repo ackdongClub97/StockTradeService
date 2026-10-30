@@ -65,6 +65,9 @@ class MatchingServiceTest {
     @Mock private FraudDetectionService fraudDetectionService;
     // 체결 시 주문·Trade·잔고를 묶는 트랜잭션 - 유닛 테스트에선 콜백만 그대로 실행되게 Mock 트랜잭션 매니저로 감쌈
     @Spy private TransactionTemplate transactionTemplate = new TransactionTemplate(mock(PlatformTransactionManager.class));
+    // 서버 1대 기준 테스트 - 모든 종목을 이 서버가 맡은 것으로 취급(다중 서버 소유권은 MatchingServiceOwnershipTest)
+    @Spy private StockOwnership ownership = StockOwnership.ownsAll();
+    @Mock private OrderResultBroadcaster orderResultBroadcaster;
 
     @InjectMocks
     private MatchingService matchingService;

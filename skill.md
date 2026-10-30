@@ -22,7 +22,7 @@
 | 기술 | 어디에 썼나 | 선택 이유 / 비고 |
 |---|---|---|
 | **JPA / Hibernate** | `Order`, `Trade`, `Member`, `Stock` 엔티티 | 객체지향 도메인 모델 설계를 직접 체득하기 위해 의도적으로 선택. 체결마다 `Trade`를 INSERT하는 불변 원장 + `Order`는 누적 상태만 관리 |
-| **H2 (File Mode)** | 운영 DB (`~/stockTrade`), 테스트는 인메모리 | 별도 DB 서버 없이 단일 인스턴스에 배포 가능한 소규모 프로젝트용 선택. 한계: Loki 무한 재시도 로그로 디스크가 차면서 `.mv.db`가 두 번 손상된 사고가 있었음(CLAUDE.md 운영 규칙) |
+| **MySQL 8.4** | 기본 DB(docker-compose, 포트 3307), 로그인 세션(Spring Session JDBC) | 처음엔 H2(File Mode)였지만 H2 파일 DB는 프로세스 하나만 열 수 있어 서버 여러 대 구성을 위해 전환(2026-10-30). 비관적 락(`SELECT ... FOR UPDATE`)·낙관적 락(`@Version`)을 InnoDB 위에서 검증 |
 | **`@Transactional`** | 주문 생성(잔고 예약+주문 저장), 취소(환급+상태), 장마감 자동취소 | 잔고 변경과 주문 상태 저장이 따로 커밋되면 "돈만 빠지고 주문은 없는" 상태가 생기던 문제 해결. 같은 클래스 안 호출은 `@Lazy` 자기주입으로 프록시를 거치게 함 (issue.md) |
 | **HikariCP** | 커넥션 풀(Spring Boot 기본) | 부하 시 풀 고갈 이슈를 추적·기록 (issue.md) |
 
@@ -82,7 +82,7 @@
 | 기술 | 어디에 썼나 | 비고 |
 |---|---|---|
 | **JUnit 5 + Mockito** | `MatchingServiceTest`(13건), `FraudDetectionServiceTest`(8건) | 경쟁 상황은 `CountDownLatch`, 스레드 `BLOCKED` 상태 대기로 순서를 고정해 재현. 수정 전 코드로 되돌려 테스트가 실제로 실패하는지까지 확인 |
-| **`@DataJpaTest`** | `MatchingServiceIntegrationTest`(3건), 매칭 알고리즘 벤치마크(일회성, 삭제됨) | 실제 Hibernate + H2 인메모리. `Propagation.NOT_SUPPORTED`로 운영처럼 호출마다 커밋 |
+| **`@DataJpaTest`** | `MatchingServiceIntegrationTest`(3건), 매칭 알고리즘 벤치마크(일회성, 삭제됨) | 실제 Hibernate + MySQL(Testcontainers). `Propagation.NOT_SUPPORTED`로 운영처럼 호출마다 커밋 |
 | **k6** | `loadtest/k6` — 500~2000명 부하 테스트 | `noCookiesReset` 등 설정 관련 사고 기록 있음 (issue.md) |
 
 ## 10. 빌드 / 배포
@@ -90,4 +90,4 @@
 | 기술 | 어디에 썼나 | 비고 |
 |---|---|---|
 | **Gradle** | 빌드, 테스트, JAR 패키징 | |
-| **AWS EC2 (Ubuntu)** | 단일 인스턴스에 앱 + Kafka/Zookeeper 함께 구동 | JAR를 SCP로 전송 후 `prod` 프로파일로 재기동 (README) |
+| **Docker Compose + nginx** | 로컬 다중 서버(`--profile cluster`): nginx 라운드로빈 → 앱 3대(1대는 시세 수집기) + Kafka + MySQL | 운영(EC2) 배포는 하지 않기로 해서 로컬 클러스터로 다중 서버 동작(파티션 분배·인계, 세션 공유, 알림 브로드캐스트)을 검증 |

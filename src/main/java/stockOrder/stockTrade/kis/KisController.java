@@ -8,7 +8,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,20 +26,6 @@ public class KisController {
     public KisController(KisService kisService, KisWebSocketService kisWebSocketService) {
         this.kisService = kisService;
         this.kisWebSocketService = kisWebSocketService;
-    }
-
-    @GetMapping("/volume-rank")
-    public Mono<List<ResponseOutputDTO>> getVolumeRank() {
-        return kisService.getVolumeRank("0");
-    }
-
-    @GetMapping("/volume")
-    public Mono<Map<String, Object>> getVolumeRanking() {
-        return kisService.getVolumeRank("0").map(list -> Map.of(
-                "updatedTime", LocalDateTime.now().toString(),
-                "count", list.size(),
-                "data", list)
-        );
     }
 
     /* 30초 갱신 캐시 데이터 즉시 반환 */
@@ -69,12 +54,7 @@ public class KisController {
                 .doOnCancel(() -> log.info("SSE 클라이언트 연결 종료"));
     }
 
-    @GetMapping("/stock-detail")
-    public Mono<ResponseOutputDTO> getStockDetail(@PathVariable String code) {
-        return kisService.getStockDetail(code);
-    }
-
-    /* 캐시된 단일 종목 스냅샷 즉시 반환 - getStockDetail과 달리 매 호출마다 실제 KIS REST를 타지 않는다.
+    /* 캐시된 단일 종목 스냅샷 즉시 반환 - 매 호출마다 실제 KIS REST를 타지 않는다.
        고빈도 상세조회(부하테스트 등)는 이 엔드포인트를 써야 KIS 쪽에 레이트리밋/부하를 주지 않는다.
        subscribe()가 최초 1회 웜업 조회로 캐시를 채우므로, 첫 호출 직후엔 204가 나올 수 있다. */
     @GetMapping("/stock/{code}/cached")

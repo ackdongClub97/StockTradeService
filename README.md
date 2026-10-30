@@ -10,9 +10,7 @@
 - **이벤트 기반 비동기 아키텍처**: Kafka로 주문 접수와 체결 처리를 분리, WebSocket/SSE로 시세·체결 결과를 실시간 스트리밍
 - **관측 가능한 운영**: FDS 이상거래탐지 + Loki/Grafana 로그 파이프라인 + 어드민 모니터링까지 갖춰 "만들고 끝"이 아니라 "운영 중 문제를 스스로 찾아내는" 구조까지 구현
 
-토큰 발급부터 시세 조회·주문·체결·모니터링까지 실서비스에 가까운 흐름을 설계하고 AWS EC2에 배포해 운영 경험까지 확보했습니다.
-
-🔗 [모의 투자 링크 click!](http://mockst.duckdns.org:8080/stockHome)
+토큰 발급부터 시세 조회·주문·체결·모니터링까지 실서비스에 가까운 흐름을 설계하고, 로컬 Docker Compose로 nginx + 앱 서버 3대 + Kafka + MySQL 구성까지 띄워 다중 서버 환경에서 검증했습니다.
 
 ---
 
@@ -61,9 +59,10 @@
 | 실시간 통신 | WebSocket (KIS 실시간 호가 수신), SSE (브라우저 스트리밍) |
 | AI | Anthropic Claude API |
 | 소셜 로그인 | Kakao OAuth2 |
-| Database | H2 (File Mode) |
+| Database | MySQL 8.4 (Spring Session JDBC로 로그인 세션도 저장) |
 | 로그/관측 | Grafana Loki + Grafana |
-| Infra | AWS EC2 (Ubuntu) |
+| Infra | Docker Compose(로컬) - nginx 라운드로빈 + 앱 서버 3대 + Kafka + MySQL |
+| Test | JUnit 5, Mockito, Testcontainers(MySQL·Kafka) |
 | Build | Gradle |
 
 ---
@@ -155,7 +154,7 @@ src/main/java
 
 ### 8️⃣ 보안
 - KIS/네이버/카카오/Anthropic API 키를 코드에서 완전히 분리 — 환경변수 또는 gitignore 처리된 로컬 시크릿 파일(`application-secret.yaml`)로만 주입
-- DB는 별도 서버 없이 단일 파일로 운영 가능한 **H2(File Mode)**를 선택 — 소규모 개인 프로젝트 배포 규모에 맞춘 실용적 선택
+- DB는 **MySQL 8.4** — 처음엔 단일 파일로 운영 가능한 H2(File Mode)였지만, H2 파일 DB는 프로세스 하나만 열 수 있어 서버 여러 대 구성이 불가능해서 전환
 
 ---
 
@@ -181,14 +180,22 @@ src/main/java
 
 ---
 
-## 🚀 배포
+## 🚀 로컬 실행
 
-- AWS EC2 (Ubuntu) — 단일 인스턴스에서 Kafka/Zookeeper와 앱을 함께 구동
-- 로컬에서 `./gradlew clean build` → `build/libs/stockTrade-0.0.1-SNAPSHOT.jar` 를 SCP로 전송
-- 서버에서 기존 프로세스 종료 후 `SPRING_PROFILES_ACTIVE=prod nohup java -jar stockTrade-0.0.1-SNAPSHOT.jar &` 로 재기동
-  - **`prod` 프로파일 필수**: 기본 `application.yaml` 은 정적 리소스/템플릿 경로를 `file:src/main/resources/...`(개발용 파일 경로)로 잡고 있어, 프로파일 없이 JAR로 띄우면 CSS/JS가 404 → 로그인 리다이렉트로 이어져 화면이 깨진다. `application-prod.yml` 이 이 경로를 `classpath:` 로 되돌린다
-  - JAR 파일만 덮어쓰고 재기동을 빠뜨리면 실행 중인 JVM은 옛 파일을 계속 물고 있으므로, 배포 시 반드시 프로세스를 내렸다 올린다 (기존 프로세스가 SSE 연결 때문에 graceful shutdown에 최대 30초 걸리므로, 그 전에 새로 띄우면 8080 포트 충돌로 기동 실패)
-- 시크릿(`application-secret.yaml`)은 JAR와 같은 디렉토리에 두거나 환경변수로 주입 — `spring.config.import` 가 실행 디렉토리 기준 상대경로(`./application-secret.yaml`)라, 기동 시 `cd` 한 위치에 파일이 있어야 읽힌다
+**서버 1대(개발)**
+```bash
+docker compose up -d mysql          # MySQL 8.4 (호스트 포트 3307)
+./gradlew bootRun                   # Kafka는 로컬 설치본(localhost:9092) 사용
+```
+
+**서버 여러 대(nginx + 앱 3대)**
+```bash
+./gradlew bootJar
+docker compose --profile cluster up -d --build   # nginx(localhost:8088) -> app1(시세 수집기)/app2/app3, 전용 Kafka(9095)
+docker compose --profile cluster stop
+```
+- 시크릿(`application-secret.yaml`, KIS·카카오·네이버·Anthropic 키)은 저장소 루트에 두면 `bootRun`은 그대로 읽고, 클러스터는 컨테이너 `/app`으로 마운트해서 읽는다. 이미지에는 넣지 않는다.
+- `./gradlew test`는 통합 테스트가 MySQL·Kafka 컨테이너(Testcontainers)를 띄우므로 Docker가 실행 중이어야 한다.
 
 ---
 

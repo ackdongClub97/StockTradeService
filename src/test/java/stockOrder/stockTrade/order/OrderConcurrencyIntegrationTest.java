@@ -23,6 +23,8 @@ import stockOrder.stockTrade.kis.AskingPriceDTO;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
 import stockOrder.stockTrade.matching.MatchingService;
+import stockOrder.stockTrade.matching.OrderResultBroadcaster;
+import stockOrder.stockTrade.matching.StockOwnership;
 import stockOrder.stockTrade.member.Member;
 import stockOrder.stockTrade.member.MemberRepository;
 import stockOrder.stockTrade.outbox.OutboxEventRepository;
@@ -105,7 +107,7 @@ class OrderConcurrencyIntegrationTest {
         return new MatchingService(repository, tradeRepository, memberRepository,
                 kisService, kisWebSocketService, mock(RealizedPnlService.class),
                 mock(AdminAlertService.class), mock(FraudDetectionService.class),
-                new TransactionTemplate(transactionManager));
+                new TransactionTemplate(transactionManager), StockOwnership.ownsAll(), mock(OrderResultBroadcaster.class));
     }
 
     private void saveMember(int seed) {

@@ -1,6 +1,5 @@
 package stockOrder.stockTrade.order;
 
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -20,7 +19,6 @@ import stockOrder.stockTrade.outbox.OutboxRelay;
 
 import java.time.Duration;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +41,7 @@ public class OrderController {
     private final OutboxRelay outboxRelay;
 
     // 잔고 예약 + 주문 저장은 OrderCommandService.submit 트랜잭션 안에서 처리하고(회원 행 락으로 동시 주문 직렬화),
-    // 아래 OrderBook 등록/Kafka 발행(Outbox 즉시 발행)은 그 트랜잭션이 커밋된 뒤에 실행된다 - 커밋 전에 컨슈머가 주문을 읽는 일이 없도록.
+    // 아래 Kafka 발행(Outbox 즉시 발행)은 그 트랜잭션이 커밋된 뒤에 실행된다. 호가창(OrderBook) 등록은 그 종목을 맡은 서버의 컨슈머가 한다 - 커밋 전에 컨슈머가 주문을 읽는 일이 없도록.
     @PostMapping("/create")
     public ResponseEntity<Map<String, Object>> submitOrder(@RequestBody Order order, @AuthenticationPrincipal CustomerDetails customerDetails) {
         if (kisService.isBeforeOrderWindow()) {
@@ -63,7 +61,6 @@ public class OrderController {
 
         log.info("order status {} / order Type {}", order.getOrderStatus(), order.getOrderType());
 
-        matchingService.registerOrder(order); // 가격-시간 우선순위 호가창(OrderBook)에 등록 - O(log n)
         fraudDetectionService.checkOnSubmit(order);
         outboxRelay.publishForAggregate(order.getOrderId()); // 커밋 후 즉시 발행 - 실패해도 OutboxRelay 주기 발행이 재시도
 

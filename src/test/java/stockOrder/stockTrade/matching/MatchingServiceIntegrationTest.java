@@ -88,7 +88,7 @@ class MatchingServiceIntegrationTest {
         matchingService = new MatchingService(orderRepository, tradeRepository, memberRepository,
                 kisService, kisWebSocketService, mock(RealizedPnlService.class),
                 mock(AdminAlertService.class), mock(FraudDetectionService.class),
-                new TransactionTemplate(transactionManager));
+                new TransactionTemplate(transactionManager), StockOwnership.ownsAll(), mock(OrderResultBroadcaster.class));
 
         Member member = new Member();
         member.setMemberId(MEMBER_ID);

@@ -21,6 +21,9 @@
 - Kafka 브로커 `localhost:9092` (토픽 `stock-order`, `stock-order-result` — 자동 생성 설정이 없으므로 브로커/토픽이 미리 있어야 함).
 - MySQL 8.4: 저장소 루트 `docker-compose.yml`(`docker compose up -d mysql`), **호스트 포트 3307** — 3306은 이 PC에 직접 설치된 MySQL이 사용 중. `spring.jpa.hibernate.ddl-auto: update`. 2026-10-30에 H2에서 전환했고 H2 의존성은 제거됨(예전 `~/stockTrade.mv.db` 파일은 이전하지 않고 남겨둠). 운영(EC2) 배포는 당분간 하지 않으므로 `prod` 프로파일은 신경 쓰지 않는다.
 
+서버 여러 대(로컬 클러스터):
+- `./gradlew bootJar && docker compose --profile cluster up -d --build` → nginx(`localhost:8088`, 라운드로빈) → `app1`(시세 수집기, `MARKET_DATA_COLLECTOR=true`) / `app2` / `app3`, 클러스터 전용 Kafka(호스트에서 `localhost:9095`), MySQL(3307). `application-secret.yaml`은 `/app`으로 마운트. 중지: `docker compose --profile cluster stop`.
+
 테스트:
 - **`./gradlew test`는 Docker가 실행 중이어야 한다.** 통합 테스트(`@DataJpaTest`, `@SpringBootTest`)는 `support/MySqlContainerConfig`(Testcontainers `mysql:8.4` + `@ServiceConnection`)로 MySQL 컨테이너를 띄워서 돈다 — 운영 파일 DB나 실제 KIS API를 건드리지 않는다.
 - `StockTradeApplicationTests`는 `KisService`/`KisWebSocketService`를 `@MockitoBean`으로 막고 Kafka 리스너 자동 시작을 꺼서 외부 연동 없이 기동만 확인한다. 실제 KIS를 호출하면 연속 실행 시 토큰 발급 제한에 걸려 실패했었음.
@@ -31,8 +34,8 @@
 
 ### 패키지 구성 (`src/main/java/stockOrder/stockTrade/`)
 - `token` — KIS OAuth2 액세스 토큰 발급/보관.
-- `kis` — `KisService`가 외부 KIS Open API로 나가는 유일한 관문(WebClient 기반, 리액티브). 순위 데이터와 종목별 시세 데이터의 인메모리 캐시를 소유하고, 같은 데이터를 pull(`Mono`)과 push(`Flux`/`Sinks`) 두 방식으로 모두 제공.
-- `stock` — H2에 저장하는 장마감 순위 스냅샷 JPA 엔티티/리포지토리.
+- `kis` — `KisService`가 외부 KIS Open API로 나가는 유일한 관문(WebClient 기반, 리액티브). 서버 여러 대일 땐 수집기 서버만 실제로 KIS를 호출하고 `MarketDataBus`로 시세를 나눔(아래 "서버 여러 대 구조"). 순위 데이터와 종목별 시세 데이터의 인메모리 캐시를 소유하고, 같은 데이터를 pull(`Mono`)과 push(`Flux`/`Sinks`) 두 방식으로 모두 제공.
+- `stock` — MySQL에 저장하는 장마감 순위 스냅샷 JPA 엔티티/리포지토리.
 - `member` — Spring Security `UserDetailsService` 연동(`CustomerDetails`/`CustomerDetailsService`) + 회원 CRUD, 투자금 잔고. `CustomerDetails`가 `UserDetails`와 `OAuth2User`를 모두 구현해서, 폼 로그인(`CustomerDetailsService`)이든 카카오 OAuth2(`KakaoOAuth2UserService`)든 `@AuthenticationPrincipal CustomerDetails`가 똑같이 동작한다. 카카오 로그인은 최초 로그인 시 `Member`를 자동 생성(`memberId = "kakao_" + kakaoId`, `provider = "KAKAO"`, 초기 투자금/레벨은 일반 가입과 동일) — `SecurityConfig.oauth2Login` 참고.
 - `order` — 주문 엔티티/리포지토리/컨트롤러/서비스. 주문 ID는 `ORD{yyyyMMdd}{seq4}` 형식으로 생성(`OrderController.submitOrder` 참고).
 - `matching` — 자체 구현 주문 매칭/체결 엔진 `MatchingService` (아래 참고).
@@ -49,6 +52,12 @@
 4. 주문 상태 머신: `PENDING` → `MATCHED` / `PARTIAL` / `CANCELLED` / `FAILED`. `matchedQuantity`/`matchedPrice`는 주문의 요청 `quantity`/`price`와 별도로 관리.
 5. 체결 결과는 SSE로 주문한 회원에게 푸시: `MatchingService`가 멀티캐스트 `Sinks.Many<Order>`를 들고 있고, `OrderController.streamOrderResult`(`GET /api/order/stream`)에서 회원별로 필터링.
 6. 잔고: 매수는 **주문 접수 시점**에 지정가 × 수량을 예약 차감하고, 체결 시엔 `MatchingService.updateSeed`가 실제 체결가와의 차액만 환급, 취소 시엔 미체결분 환급. 잔고 증감은 모두 `MemberRepository.addSeed`(`seed = seed + delta` 원자적 UPDATE). 체결(`execute`)은 주문·Trade·잔고를 한 트랜잭션으로 묶고, 취소/체결 경쟁은 `Order @Version`으로 나중 쪽이 롤백(취소가 지면 409). 락 순서는 항상 주문 행 → 회원 행(데드락 방지).
+
+### 서버 여러 대 구조 (2026-10-30)
+- **체결 = 종목 파티션 단위 단일 writer**: `stock-order` 키가 종목코드(파티션 6개). 컨슈머 그룹(`order-group`)에서 파티션을 받은 서버만 그 종목을 체결한다(`StockOwnership`, `OrderService`의 `ConsumerSeekAware` 콜백 → `MatchingService.onPartitionsAssigned/Revoked`). 30초 배치·장마감 취소도 `ownership.owns(stockCode)`로 자기 종목만. 파티션 반납 시 소유권 해제 → 종목 락을 잡아 진행 중 체결 완료 대기 → 호가창 정리. `CooperativeStickyAssignor`. 호가창 등록은 컨트롤러가 아니라 담당 서버 컨슈머(`processOrder`)가 한다.
+- **시세 = 수집기 1대**: `market-data.collector=true`(env `MARKET_DATA_COLLECTOR`, 기본 true) 서버만 KIS 토큰·웹소켓·REST·랭킹 폴링·장마감 랭킹 저장을 하고 `MarketDataBus`로 Kafka에 발행. 모든 서버는 compacted 토픽(`market-asking-price`/`market-stock-detail`/`market-ranking`, 키=종목코드)을 고유 그룹 + earliest로 받아 캐시·SSE에 반영 → 장 마감 후 기동해도 종가 표시. 종목 구독 요청은 `market-subscribe`(compacted)로 수집기에 전달. 수집기가 아니면 `getStockDetail`/`getVolumeRank`가 KIS 대신 Kafka로 받은 값을 반환.
+- **세션·알림**: Spring Session JDBC(MySQL `SPRING_SESSION`, 그래서 `Member`는 `Serializable`). 체결 결과(`order-result`, `OrderResultBroadcaster`)·관리자 알림(`admin-alert`)은 Kafka 브로드캐스트(고유 그룹 + latest).
+- 정규장(09:00–15:30)에만 체결하고 그 외 시간엔 종가를 보여준다는 규칙은 그대로(`isMarketOpen()`).
 
 ### KIS API 연동 (`KisService` + `KisWebSocketService`)
 - REST: 공용 bearer 토큰 하나를 `@Scheduled`(`TokenService.fetchToken`)로 12시간마다 갱신. KIS 토큰 만료는 24시간.
@@ -73,7 +82,7 @@
 - SSE 엔드포인트는 `DispatcherType.ASYNC`를 명시적으로 허용해야 한다 — Spring Security가 비동기 디스패치에서 인증을 다시 검사하기 때문에, 이걸 빠뜨리면 SSE 스트림이 403이 난다(README에 기록된 과거 사고).
 
 ### 설정
-- `src/main/resources/application.yaml`이 개발/기본 설정이고, `application-prod.yml`이 EC2 배포용으로 덮어쓴다.
+- 설정은 `src/main/resources/application.yaml` 하나이고 로컬 실행 기준이다. 운영(EC2) 배포는 하지 않으므로 `prod` 프로파일·`application-prod.yml`은 없다(2026-10-30 제거). 서버 여러 대 실행은 docker-compose 환경변수로 덮어쓴다.
 - `hantu-openapi.appUrl`은 KIS **모의투자** 엔드포인트(`openapivts...`)를 가리킨다. 실전 엔드포인트는 주석 처리된 채로 남아 있다.
 - KIS, 네이버, 카카오 인증정보(`HANTU_APP_KEY`, `HANTU_APP_SECRET`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `KAKAO_CLIENT_ID`, `KAKAO_CLIENT_SECRET`)는 환경변수 또는 저장소 루트의 gitignore된 선택적 파일 `application-secret.yaml`(`application-secret.yaml.example` 참고)에서 읽으며, **커밋하지 않는다**. 실제 인증정보를 `application.yaml`에 다시 하드코딩하지 말 것.
 

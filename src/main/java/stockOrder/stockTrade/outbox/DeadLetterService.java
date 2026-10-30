@@ -41,7 +41,7 @@ public class DeadLetterService {
         deadLetterRepository.save(deadLetter);
 
         log.error("[DLQ] 처리 실패 메시지 적재 id={} topic={} key={} : {}", deadLetter.getId(), deadLetter.getOriginalTopic(), record.key(), error);
-        adminAlertService.publish(new AdminAlert(parseOrderId(record.key()), null,
+        adminAlertService.publish(new AdminAlert(null, record.key(), // 주문 메시지 키 = 종목코드
                 "DLQ 적재(재시도 후에도 실패): " + error, LocalDateTime.now()));
     }
 
@@ -65,13 +65,5 @@ public class DeadLetterService {
     private static String header(ConsumerRecord<String, String> record, String name) {
         Header header = record.headers().lastHeader(name);
         return header == null ? null : new String(header.value(), StandardCharsets.UTF_8);
-    }
-
-    private static Long parseOrderId(String key) {
-        try {
-            return key == null ? null : Long.valueOf(key);
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 }

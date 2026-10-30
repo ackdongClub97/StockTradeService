@@ -4,13 +4,18 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 @Entity
 @Getter
 @Setter
 @Table(name="members")
-public class Member {
+// Serializable: 로그인 세션(SecurityContext -> CustomerDetails -> Member)을 Spring Session JDBC가 DB에 저장할 때
+// 자바 직렬화를 쓰기 때문. 세션이 서버 메모리에만 있을 땐 필요 없었음
+public class Member implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     @Id
     private String memberId;        // 아이디

@@ -69,8 +69,9 @@ public class OrderCommandService {
         orderRepository.save(order);
 
         // Kafka로 바로 보내지 않고 같은 트랜잭션에서 Outbox에 기록 - 주문 저장과 "보낼 메시지"가 같이 커밋되거나 같이 롤백된다.
-        // 실제 발행은 커밋 이후 OutboxRelay가 한다(즉시 발행 + 실패 시 주기 재발행)
-        outboxEventRepository.save(OutboxEvent.of(OrderKafkaConfig.ORDER_TOPIC, String.valueOf(order.getOrderId()),
+        // 실제 발행은 커밋 이후 OutboxRelay가 한다(즉시 발행 + 실패 시 주기 재발행).
+        // 메시지 키 = 종목코드: 같은 종목 주문은 같은 파티션 -> 그 파티션을 맡은 서버 한 곳에서 순서대로 처리(단일 writer)
+        outboxEventRepository.save(OutboxEvent.of(OrderKafkaConfig.ORDER_TOPIC, order.getStockCode(),
                 objectMapper.writeValueAsString(order), order.getOrderId()));
 
         return SubmitResult.OK;

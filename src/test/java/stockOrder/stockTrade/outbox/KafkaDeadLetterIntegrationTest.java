@@ -4,13 +4,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.testcontainers.kafka.KafkaContainer;
 import stockOrder.stockTrade.kis.KisService;
 import stockOrder.stockTrade.kis.KisWebSocketService;
 import stockOrder.stockTrade.matching.MatchingService;
@@ -18,6 +14,7 @@ import stockOrder.stockTrade.order.Order;
 import stockOrder.stockTrade.order.OrderKafkaConfig;
 import stockOrder.stockTrade.order.OrderStatus;
 import stockOrder.stockTrade.order.OrderType;
+import stockOrder.stockTrade.support.KafkaContainerConfig;
 import stockOrder.stockTrade.support.MySqlContainerConfig;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -47,17 +44,8 @@ import static org.mockito.Mockito.verify;
         "naver-openapi.clientId=test",
         "naver-openapi.clientSecret=test",
 })
-@Import({MySqlContainerConfig.class, KafkaDeadLetterIntegrationTest.KafkaContainerConfig.class})
+@Import({MySqlContainerConfig.class, KafkaContainerConfig.class})
 class KafkaDeadLetterIntegrationTest {
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class KafkaContainerConfig {
-        @Bean
-        @ServiceConnection
-        KafkaContainer kafkaContainer() {
-            return new KafkaContainer("apache/kafka:3.8.0");
-        }
-    }
 
     @Autowired private KafkaTemplate<String, String> kafkaTemplate;
     @Autowired private DeadLetterRepository deadLetterRepository;

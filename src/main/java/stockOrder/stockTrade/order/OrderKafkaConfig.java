@@ -18,6 +18,14 @@ public class OrderKafkaConfig {
     public static final String ORDER_TOPIC = "stock-order";
     public static final String ORDER_DLT = ORDER_TOPIC + ".DLT";
 
+    /* 주문 토픽 - 파티션 = 체결 담당 단위. 키가 종목코드라 한 종목은 한 파티션, 한 파티션은 한 서버만 소비한다.
+       파티션 수가 서버 수의 상한이라 여유 있게 6개. 이미 있는 토픽이 이보다 적으면 KafkaAdmin이 기동 시 늘려준다
+       (파티션을 늘리면 종목 -> 파티션 배치가 바뀌므로, 늘린 직후엔 리밸런스로 각 서버가 호가창을 다시 구성함) */
+    @Bean
+    NewTopic orderTopic() {
+        return TopicBuilder.name(ORDER_TOPIC).partitions(6).replicas(1).build();
+    }
+
     // 브로커 자동 생성 설정에 기대지 않고 앱이 기동할 때 DLT 토픽을 만든다(KafkaAdmin) - 없으면 DLT 발행 자체가 실패함
     @Bean
     NewTopic orderDeadLetterTopic() {

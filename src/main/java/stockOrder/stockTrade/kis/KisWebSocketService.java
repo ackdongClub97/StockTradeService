@@ -19,10 +19,13 @@ import reactor.core.publisher.Sinks;
 import stockOrder.stockTrade.token.TokenService;
 
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /* KIS 실시간시세 웹소켓 - 호가(H0STASP0) 종목 단위 구독.
    체결가(H0STCNT0)는 별도로 구독하지 않는다 - 매칭엔진은 원래도 호가만 쓰고, 화면에 필요한
@@ -43,9 +46,18 @@ public class KisWebSocketService extends TextWebSocketHandler {
     private final TokenService tokenService;
     private final KisService kisService;
     private final ObjectMapper objectMapper;
+    private final MarketDataBus marketDataBus;
 
     private volatile String approvalKey;
     private volatile WebSocketSession session;
+
+    /* 연결 로그는 "기동 시 첫 시도 / 성공 / 끊김 / 재연결 성공"만 info·warn으로 남긴다.
+       끊긴 동안 10초마다 도는 재시도, 12시간마다의 정기 승인키 갱신·재연결, 종목별 구독 요청/응답처럼 계속 반복되는 건 debug */
+    private volatile boolean everConnected = false;       // 기동 후 한 번이라도 연결된 적 있는지(첫 연결 vs 재연결 구분)
+    private volatile Instant disconnectedAt;               // 예기치 않게 끊긴 시각 - null이면 정상 연결 중
+    private final AtomicInteger reconnectAttempts = new AtomicInteger();
+    private final Set<String> dailyStatsFailing = ConcurrentHashMap.newKeySet(); // 누적거래량 REST 갱신이 실패 중인 종목
+    private volatile boolean plannedReconnect = false;     // 승인키 정기 갱신으로 일부러 끊은 경우
 
     private final Set<String> subscribedCodes = ConcurrentHashMap.newKeySet();
     private final Map<String, Sinks.Many<AskingPriceDTO>> askingPriceSink = new ConcurrentHashMap<>();
@@ -56,40 +68,58 @@ public class KisWebSocketService extends TextWebSocketHandler {
 
     private record DailyStats(int prevClose, String acmlVol) {}
 
-    public KisWebSocketService(TokenService tokenService, KisService kisService, ObjectMapper objectMapper) {
+    public KisWebSocketService(TokenService tokenService, KisService kisService, ObjectMapper objectMapper, MarketDataBus marketDataBus) {
         this.tokenService = tokenService;
         this.kisService = kisService;
         this.objectMapper = objectMapper;
+        this.marketDataBus = marketDataBus;
     }
 
+    /* KIS 웹소켓은 수집기(market-data.collector=true) 서버만 연결한다 - 나머지 서버는 Kafka로 시세를 받음(MarketDataBus) */
     @PostConstruct
     public void init() {
+        if (!marketDataBus.isCollector()) return;
         try {
+            log.info("[KisWS] 웹소켓 승인키 발급·연결 시도(기동)");
             this.approvalKey = tokenService.fetchApprovalKey();
             connect();
         } catch (Exception e) {
-            log.error("[KisWS] 초기화 실패: {}", e.getMessage());
+            disconnectedAt = Instant.now();
+            log.error("[KisWS] 기동 시 승인키 발급 실패 - 10초마다 재시도: {}", e.getMessage());
         }
     }
 
     /* 접속키 유효기간 24시간 - REST 토큰과 동일 주기로 갱신 후 재연결 */
     @Scheduled(fixedRate = 12 * 60 * 60 * 1000, initialDelay = 12 * 60 * 60 * 1000)
     public void refreshApprovalKey() {
+        if (!marketDataBus.isCollector()) return;
         try {
             this.approvalKey = tokenService.fetchApprovalKey();
-            log.info("[KisWS] 승인키 갱신 완료 - 재연결");
+            log.debug("[KisWS] 승인키 정기 갱신 완료 - 재연결");
+            plannedReconnect = true;
             closeSessionQuietly();
             connect();
         } catch (Exception e) {
-            log.error("[KisWS] 승인키 갱신 실패: {}", e.getMessage());
+            log.error("[KisWS] 승인키 정기 갱신 실패 - 기존 연결은 유지, 다음 갱신 때 재시도: {}", e.getMessage());
         }
     }
 
     @Scheduled(fixedDelay = 10000, initialDelay = 10000)
     public void healthCheck() {
+        if (!marketDataBus.isCollector()) return;
         if (session == null || !session.isOpen()) {
-            log.warn("[KisWS] 세션 끊김 감지 - 재연결 시도");
-            connect();
+            if (disconnectedAt == null) {
+                // afterConnectionClosed 없이 끊긴 경우(네트워크 단절 등) - 끊김은 여기서 한 번만 남김
+                disconnectedAt = Instant.now();
+                log.warn("[KisWS] 연결 끊김 감지 - 10초마다 재연결 시도");
+            }
+            log.debug("[KisWS] 재연결 시도 #{}", reconnectAttempts.incrementAndGet());
+            try {
+                if (approvalKey == null) approvalKey = tokenService.fetchApprovalKey(); // 기동 시 승인키 발급부터 실패한 경우
+                connect();
+            } catch (Exception e) {
+                log.debug("[KisWS] 재연결 시도 실패(승인키): {}", e.getMessage());
+            }
         }
     }
 
@@ -105,15 +135,31 @@ public class KisWebSocketService extends TextWebSocketHandler {
             client.execute(this, new WebSocketHttpHeaders(), URI.create(wsUrl))
                     .thenAccept(newSession -> {
                         this.session = newSession;
-                        log.info("[KisWS] 연결 성공");
                         resubscribeAll();
+                        if (!everConnected) {
+                            log.info("[KisWS] 연결 성공(기동)");
+                        } else if (disconnectedAt != null) {
+                            log.info("[KisWS] 재연결 성공 - 끊긴 지 {}초, 재시도 {}회, {}종목 재구독",
+                                    Duration.between(disconnectedAt, Instant.now()).toSeconds(), reconnectAttempts.get(), subscribedCodes.size());
+                        } else {
+                            log.debug("[KisWS] 정기 재연결 완료 - {}종목 재구독", subscribedCodes.size());
+                        }
+                        everConnected = true;
+                        disconnectedAt = null;
+                        reconnectAttempts.set(0);
+                        plannedReconnect = false;
                     })
                     .exceptionally(ex -> {
-                        log.error("[KisWS] 연결 실패: {}", ex.getMessage());
+                        if (!everConnected && reconnectAttempts.get() == 0) {
+                            disconnectedAt = Instant.now();
+                            log.error("[KisWS] 기동 시 연결 실패 - 10초마다 재시도: {}", ex.getMessage());
+                        } else {
+                            log.debug("[KisWS] 재연결 실패: {}", ex.getMessage());
+                        }
                         return null;
                     });
         } catch (Exception e) {
-            log.error("[KisWS] 연결 시도 실패: {}", e.getMessage());
+            log.debug("[KisWS] 연결 시도 실패: {}", e.getMessage());
         }
     }
 
@@ -125,8 +171,14 @@ public class KisWebSocketService extends TextWebSocketHandler {
         }
     }
 
-    /* 종목 실시간 구독 등록 - 멱등. 최초 구독 시 REST로 한 번 웜업하여 첫 틱 전까지의 공백을 없앤다 */
+    /* 어느 서버에서든 호출 - "이 종목 시세가 필요하다"를 수집기에 전달(Kafka). 실제 KIS 등록은 수집기가 subscribeOnKis로 한다 */
     public void subscribe(String code) {
+        marketDataBus.requestSubscribe(code);
+    }
+
+    /* 수집기 전용 - 종목 실시간 구독 등록. 멱등. 최초 구독 시 REST로 한 번 웜업하여 첫 틱 전까지의 공백을 없앤다
+       (장 마감 후엔 틱이 안 오므로 이 웜업 값 = 그날 종가가 Kafka에 남아 모든 서버 화면에 계속 보인다) */
+    public void subscribeOnKis(String code) {
         if (subscribedCodes.contains(code)) return;
 
         if (subscribedCodes.size() >= MAX_SUBSCRIPTIONS) {
@@ -139,8 +191,8 @@ public class KisWebSocketService extends TextWebSocketHandler {
 
         kisService.getStockDetail(code).subscribe(
                 dto -> {
-                    kisService.pushStockDetail(code, dto);
                     cacheDailyStats(code, dto);
+                    marketDataBus.publishStockDetail(code, dto);
                 },
                 err -> log.warn("[KisWS] {} 웜업 조회 실패: {}", code, err.getMessage())
         );
@@ -150,14 +202,21 @@ public class KisWebSocketService extends TextWebSocketHandler {
        같은 김에 전일종가도 다시 확인해서(자정 넘어 날짜가 바뀌는 경우 대비) dailyStats를 최신 상태로 유지한다. */
     @Scheduled(fixedDelay = 30000, initialDelay = 30000)
     public void refreshDailyStats() {
+        if (!marketDataBus.isCollector()) return;
         subscribedCodes.forEach(code ->
                 kisService.getStockDetail(code).subscribe(
                         dto -> {
+                            if (dailyStatsFailing.remove(code)) log.info("[KisWS] {} 누적거래량 갱신 복구", code);
                             cacheDailyStats(code, dto);
                             AskingPriceDTO book = cachedAskingPrice.get(code);
                             if (book != null) pushDerivedDetail(code, book);
+                            else marketDataBus.publishStockDetail(code, dto); // 장 마감 후 등 호가 틱이 없으면 REST 값(종가) 그대로
                         },
-                        err -> log.warn("[KisWS] {} 누적거래량 갱신 실패: {}", code, err.getMessage())
+                        err -> {
+                            // KIS가 안 될 때 30초마다 종목 수만큼 반복되지 않도록 첫 실패만 warn, 복구되면 한 줄
+                            if (dailyStatsFailing.add(code)) log.warn("[KisWS] {} 누적거래량 갱신 실패 - 복구될 때까지 30초마다 재시도: {}", code, err.getMessage());
+                            else log.debug("[KisWS] {} 누적거래량 갱신 재실패: {}", code, err.getMessage());
+                        }
                 )
         );
     }
@@ -192,7 +251,7 @@ public class KisWebSocketService extends TextWebSocketHandler {
         dto.setPrdyCtrt(String.format(java.util.Locale.US, "%.2f", ctrt));
         dto.setAcmlVol(stats.acmlVol());
 
-        kisService.pushStockDetail(code, dto);
+        marketDataBus.publishStockDetail(code, dto);
     }
 
     private static Integer deriveCurrentPrice(AskingPriceDTO book) {
@@ -244,7 +303,7 @@ public class KisWebSocketService extends TextWebSocketHandler {
 
     private void send(String trId, String code) {
         if (session == null || !session.isOpen()) {
-            log.warn("[KisWS] 세션 미연결 상태 - {} {} 구독 요청 보류", trId, code);
+            log.debug("[KisWS] 세션 미연결 상태 - {} {} 구독 요청 보류(재연결 시 전체 재구독)", trId, code);
             return;
         }
         try {
@@ -263,7 +322,7 @@ public class KisWebSocketService extends TextWebSocketHandler {
             message.put("body", Map.of("input", input));
 
             session.sendMessage(new TextMessage(objectMapper.writeValueAsString(message)));
-            log.info("[KisWS] 구독 요청: {} / {}", trId, code);
+            log.debug("[KisWS] 구독 요청: {} / {}", trId, code);
         } catch (Exception e) {
             log.error("[KisWS] 구독 요청 실패: {} / {} / {}", trId, code, e.getMessage());
         }
@@ -291,7 +350,14 @@ public class KisWebSocketService extends TextWebSocketHandler {
                 return;
             }
 
-            log.info("[KisWS] 제어 메시지: {}", raw);
+            // 구독 요청마다 오는 응답(SUBSCRIBE SUCCESS 등)은 반복 로그라 debug, 실패 응답(rt_cd != 0)만 남긴다
+            JsonNode body = objectMapper.readTree(raw).get("body");
+            String rtCd = (body != null && body.get("rt_cd") != null) ? body.get("rt_cd").asText() : "0";
+            if ("0".equals(rtCd)) {
+                log.debug("[KisWS] 제어 메시지: {}", raw);
+            } else {
+                log.warn("[KisWS] 구독 요청 실패 응답: {}", raw);
+            }
         } catch (Exception e) {
             log.warn("[KisWS] 제어 메시지 파싱 실패: {}", raw);
         }
@@ -338,12 +404,19 @@ public class KisWebSocketService extends TextWebSocketHandler {
         dto.setTotalAskVolume(f[43]);
         dto.setTotalBidVolume(f[44]);
 
+        // 수집기는 받은 틱을 Kafka로 발행만 하고, 자기 캐시도 다른 서버와 똑같이 Kafka에서 받아 갱신한다(applyAskingPrice)
+        marketDataBus.publishAskingPrice(dto);
+        pushDerivedDetail(code, dto);
+    }
+
+    /* 모든 서버 - Kafka로 받은 호가 틱을 캐시(매칭엔진용)와 SSE에 반영.
+       틱마다 새 객체라 MatchingService의 "같은 틱이냐"(객체 identity) 판별이 그대로 동작한다 */
+    public void applyAskingPrice(AskingPriceDTO dto) {
+        String code = dto.getStockCode();
         cachedAskingPrice.put(code, dto);
 
         Sinks.Many<AskingPriceDTO> sink = askingPriceSink.get(code);
         if (sink != null) sink.tryEmitNext(dto);
-
-        pushDerivedDetail(code, dto);
     }
 
     /* 매칭엔진이 체결가능수량/가격을 판단할 때 쓰는 최신 호가 스냅샷 - 없으면 null(아직 첫 프레임 전) */
@@ -353,12 +426,17 @@ public class KisWebSocketService extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, org.springframework.web.socket.CloseStatus status) {
-        log.warn("[KisWS] 연결 종료: {}", status);
         this.session = null;
+        if (plannedReconnect) {
+            log.debug("[KisWS] 승인키 갱신으로 연결 종료: {}", status);
+        } else if (disconnectedAt == null) {
+            disconnectedAt = Instant.now();
+            log.warn("[KisWS] 연결 끊김: {} - 10초마다 재연결 시도", status);
+        }
     }
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.error("[KisWS] transport error: {}", exception.getMessage());
+        log.debug("[KisWS] transport error: {}", exception.getMessage()); // 끊김 자체는 afterConnectionClosed/healthCheck가 한 번만 남김
     }
 }

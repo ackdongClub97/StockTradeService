@@ -19,17 +19,7 @@ spring:
     cache: false
     prefix: file:src/main/resources/templates/
 
-  task:
-    scheduling:
-      enabled: true
-
-  freemarker:
-    cache: false
-
   security:
-    user:
-      name:
-      password:
     oauth2:
       client:
         registration:
@@ -57,6 +47,10 @@ spring:
     password: ${MYSQL_PASSWORD:stocktrade}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  session:
+    jdbc:
+      initialize-schema: always # SPRING_SESSION 테이블이 없으면 기동 시 생성
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -72,6 +66,10 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        # 리밸런스 때 모든 파티션을 내려놨다 다시 받는(eager) 대신, 옮겨가는 파티션만 넘긴다 -
+        # 서버가 하나 늘거나 줄어도 나머지 종목의 체결은 멈추지 않고, 호가창도 옮겨가는 종목만 다시 구성
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -86,6 +84,11 @@ hantu-openapi:
 logging:
   level:
     org.hibernate.SQL: debug
+
+# 시세 수집기 여부 - KIS(토큰·웹소켓·REST·랭킹 폴링·장마감 저장)와 직접 통신하는 서버는 한 대만 true.
+# 나머지 서버는 false로 띄우면 Kafka(MarketDataBus)로 시세를 받기만 한다. 서버 한 대로 실행할 땐 기본값 true 그대로.
+market-data:
+  collector: ${MARKET_DATA_COLLECTOR:true}
 
 kis:
   rank:
@@ -114,3 +117,7 @@ fds:
   price-outlier:
     threshold-percent: 20
 
+
+# nginx 뒤에서 X-Forwarded-* 헤더로 원래 호스트/스킴을 인식 - 로그인 리다이렉트, 카카오 OAuth redirect-uri가 nginx 주소 기준으로 만들어지도록
+server:
+  forward-headers-strategy: framework

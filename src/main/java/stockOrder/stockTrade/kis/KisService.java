@@ -52,6 +52,9 @@ public class KisService {
     @Lazy
     private KisWebSocketService kisWebSocketService;
 
+    @Autowired
+    private MarketDataBus marketDataBus;
+
 
     private String token;
     private boolean saveToday = false;
@@ -73,26 +76,32 @@ public class KisService {
     // 종목별 상세 sink가 없어도(=해당 종목 상세페이지를 아무도 안 보고 있어도) 가격 갱신을 알 수 있도록 하는 전역 sink - 보유주식 실시간 갱신 등에 사용
     private final Sinks.Many<String> priceUpdateSink = Sinks.many().multicast().onBackpressureBuffer();
 
+    /* KIS 토큰·REST·랭킹 폴링·장마감 저장은 수집기 서버만 - 나머지 서버는 MarketDataBus(Kafka)로 받은 값만 쓴다 */
     @PostConstruct
     public void init() throws IOException, InterruptedException {
+        if (!marketDataBus.isCollector()) return;
+        log.info("[Token] 접근토큰 발급 시도(기동)");
         this.token = tokenService.fetchToken();
+        log.info("[Token] 접근토큰 발급 성공 - 유효 24시간, 12시간마다 갱신");
         this.webClient = WebClient.builder().baseUrl(apiUrl).build();
         restartFromDb();
     }
 
-    /* 24시간 만료라 12시간마다 갱신 */
+    /* 24시간 만료라 12시간마다 갱신. 정기 갱신 성공은 주기적으로 반복되는 로그라 debug로만 남기고, 실패만 남긴다
+       (실패하면 지금 토큰이 만료되는 시점부터 KIS 호출이 끊김) */
     @Scheduled(fixedRate = 12 * 60 * 60 * 1000, initialDelay = 12 * 60 * 60 * 1000)
     public void refreshToken() {
+        if (!marketDataBus.isCollector()) return;
         try {
             this.token = tokenService.fetchToken();
-            log.info("[Token] 토큰 갱신 완료");
+            log.debug("[Token] 접근토큰 정기 갱신 완료");
         } catch (Exception e) {
-            log.error("[Token] 토큰 갱신 실패: {}", e.getMessage());
+            log.error("[Token] 접근토큰 정기 갱신 실패 - 기존 토큰이 만료되면 KIS 호출이 끊김: {}", e.getMessage());
         }
     }
 
     @Autowired
-    public KisService(TokenService tokenService, WebClient.Builder webClientBuilder, ObjectMapper objectMapper) throws IOException, InterruptedException {
+    public KisService(TokenService tokenService, ObjectMapper objectMapper) throws IOException, InterruptedException {
         this.tokenService = tokenService;
         this.objectMapper =  objectMapper;
     }
@@ -122,21 +131,10 @@ public class KisService {
                     responseData.setMkscShrnIscd(node.get("mksc_shrn_iscd").asText());
                     responseData.setDataRank(node.get("data_rank").asText());
                     responseData.setStckPrpr(node.get("stck_prpr").asText());
-                    responseData.setPrdyVrssSign(node.get("prdy_vrss_sign").asText());
                     responseData.setPrdyVrss(node.get("prdy_vrss").asText());
                     responseData.setPrdyCtrt(node.get("prdy_ctrt").asText());
                     responseData.setAcmlVol(node.get("acml_vol").asText());
                     responseData.setPrdyVol(node.get("prdy_vol").asText());
-                    responseData.setLstnStcn(node.get("lstn_stcn").asText());
-                    responseData.setAvrgVol(node.get("avrg_vol").asText());
-                    responseData.setNBefrClprVrssPrprRate(node.get("n_befr_clpr_vrss_prpr_rate").asText());
-                    responseData.setVolInrt(node.get("vol_inrt").asText());
-                    responseData.setVolTnrt(node.get("vol_tnrt").asText());
-                    responseData.setNdayVolTnrt(node.get("nday_vol_tnrt").asText());
-                    responseData.setAvrgTrPbmn(node.get("avrg_tr_pbmn").asText());
-                    responseData.setTrPbmnTnrt(node.get("tr_pbmn_tnrt").asText());
-                    responseData.setNdayTrPbmnTnrt(node.get("nday_tr_pbmn_tnrt").asText());
-                    responseData.setAcmlTrPbmn(node.get("acml_tr_pbmn").asText());
                     responseDataList.add(responseData);
                 }
             }
@@ -147,6 +145,9 @@ public class KisService {
     }
 
     public Mono<List<ResponseOutputDTO>> getVolumeRank(String timeChk) {
+        if (!marketDataBus.isCollector()) {
+            return Mono.just(getCachedRanking()); // 수집기가 아니면 KIS 대신 Kafka로 받은 마지막 랭킹
+        }
         HttpHeaders headers = createVolumeRankHttpHeaders();
         String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
 
@@ -191,6 +192,7 @@ public class KisService {
 
     @Scheduled(fixedDelayString = "${kis.rank.refresh-interval-ms:30000}", initialDelay = 0)
     public void refreshRank() {
+        if (!marketDataBus.isCollector()) return;
         // 본장(정규장) 외 시간에도 KIS는 그날 종가 기준 데이터를 정상적으로 내려준다(2026-08-17 재검증 - 기존 주석은
         // 오판이었음). 다만 매 주기(30초)마다 다시 호출할 필요는 없으므로, 캐시가 이미 있으면 저장해둔 마지막 데이터를
         // 그대로 재전송하고, 캐시가 비어있을 때만(재기동 직후 등) KIS를 한 번 직접 호출해 채운다(아래 else 분기).
@@ -205,7 +207,7 @@ public class KisService {
                 log.info("장마감 최종 랭킹 저장");
             }
             if(!cachedData.isEmpty()) {
-                rankSink.tryEmitNext(List.copyOf(cachedData));
+                marketDataBus.publishRanking(List.copyOf(cachedData));
             } else {
                 // DB에도 없고 캐시도 비어있는 경우(예: DB 초기화 직후 재기동) - 장마감 후라도 KIS는 그날
                 // 종가 기준 랭킹을 정상적으로 내려주는 것으로 실측 확인됨(2026-08-17). 다음 장이 열릴 때까지
@@ -215,7 +217,7 @@ public class KisService {
                         list -> {
                             cachedData.clear();
                             cachedData.addAll(list);
-                            rankSink.tryEmitNext(List.copyOf(cachedData));
+                            marketDataBus.publishRanking(List.copyOf(cachedData));
                         }, err -> log.error("[refreshRank] 장마감 후 캐시 채우기용 조회 실패: {}", err.getMessage())
                 );
             }
@@ -228,9 +230,16 @@ public class KisService {
                 list -> {
                     cachedData.clear();
                     cachedData.addAll(list);
-                    rankSink.tryEmitNext(List.copyOf(cachedData));
+                    marketDataBus.publishRanking(List.copyOf(cachedData));
                 }, err -> log.error("[refreshRank] 조회 실패: {}", err.getMessage())
         );
+    }
+
+    /* 모든 서버 - Kafka(MarketDataBus)로 받은 랭킹을 캐시와 SSE에 반영. 수집기는 장 중 30초마다, 장 마감 후엔 종가 랭킹을 계속 발행한다 */
+    public void applyRanking(List<ResponseOutputDTO> ranking) {
+        cachedData.clear();
+        cachedData.addAll(ranking);
+        rankSink.tryEmitNext(List.copyOf(ranking));
     }
 
     /* ranking data 즉시 반환 */
@@ -240,14 +249,11 @@ public class KisService {
 
     /* SSE 스트림 */
     public Flux<List<ResponseOutputDTO>> getRankingStream(){
+        // 새로 접속하면 KIS를 직접 다시 부르지 않고 마지막 랭킹(장 중엔 최대 30초 전, 장 마감 후엔 종가 랭킹)을 바로 보여준다 -
+        // KIS 호출은 수집기의 refreshRank 하나로 모음
         return rankSink.asFlux()
                 .doOnSubscribe(s -> {
-                    if(isMarketOpen()) {
-                        getVolumeRank("0").subscribe(
-                                data -> rankSink.tryEmitNext(data),
-                                err -> log.error("랭킹 조회 실패: {}", err.getMessage())
-                        );
-                    } else if(!cachedData.isEmpty()) {
+                    if(!cachedData.isEmpty()) {
                         rankSink.tryEmitNext(List.copyOf(cachedData));
                     }
                 });
@@ -272,6 +278,14 @@ public class KisService {
     }
 
     public Mono<ResponseOutputDTO> getStockDetail(String code) {
+        if (!marketDataBus.isCollector()) {
+            // 수집기가 아니면 KIS를 직접 부르지 않고, 구독 요청 후 Kafka로 들어오는 첫 값을 잠깐(3초) 기다린다
+            kisWebSocketService.subscribe(code);
+            ResponseOutputDTO cached = cachedStockData.get(code);
+            if (cached != null) return Mono.just(cached);
+            return detailSink.computeIfAbsent(code, k -> Sinks.many().replay().latest())
+                    .asFlux().next().timeout(Duration.ofSeconds(3));
+        }
         return webClient.get().uri(
                 uriBuilder -> uriBuilder.path("/uapi/domestic-stock/v1/quotations/inquire-price")
                         .queryParam("FID_COND_MRKT_DIV_CODE", "J")
@@ -344,17 +358,6 @@ public class KisService {
         LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
         LocalTime open = LocalTime.of(9, 0);
         LocalTime close = LocalTime.of(15, 30);
-
-        DayOfWeek day = LocalDate.now(ZoneId.of("Asia/Seoul")).getDayOfWeek();
-        boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
-
-        return isWeekday && now.isAfter(open) && now.isBefore(close);
-    }
-
-    public boolean isAfterMarket() {
-        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
-        LocalTime open = LocalTime.of(15, 30);
-        LocalTime close = LocalTime.of(18, 0);
 
         DayOfWeek day = LocalDate.now(ZoneId.of("Asia/Seoul")).getDayOfWeek();
         boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
