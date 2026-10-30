@@ -1,0 +1,497 @@
+openapi: 3.0.3
+info:
+  title: 모의투자 체결 시스템 API
+  version: "2026-10-30"
+  description: |
+    한국투자증권(KIS) 실시간 시세 + 자체 매칭 엔진 기반 모의투자 API.
+    - 인증: 세션 쿠키(`SESSION`, Spring Session JDBC - 서버 여러 대가 MySQL의 같은 세션을 봄). 폼 로그인 또는 카카오 OAuth2로 발급.
+    - 실시간 데이터는 SSE(`text/event-stream`). 서버 여러 대 구성에서도 어느 서버에 붙든 같은 이벤트를 받는다(Kafka 브로드캐스트).
+    - 체결은 정규장(09:00~15:30, Asia/Seoul)에만 일어나고, 그 외 시간엔 시세/랭킹 API가 종가를 돌려준다.
+    - 오류 응답 본문은 공통으로 `{"message": "..."}`.
+    설계 근거는 docs/api-design.md 참고.
+servers:
+  - url: http://localhost:8080
+    description: 서버 1대(./gradlew bootRun)
+  - url: http://localhost:8088
+    description: 서버 여러 대(nginx 라운드로빈 → 앱 3대, docker compose --profile cluster)
+
+tags:
+  - name: 인증
+  - name: 회원
+  - name: 주문
+  - name: 시세
+  - name: 뉴스
+  - name: 어드민
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: SESSION
+  schemas:
+    Message:
+      type: object
+      properties:
+        message: { type: string, example: SUCCESS }
+    OrderType: { type: string, enum: [BUY, SELL] }
+    OrderStatus: { type: string, enum: [PENDING, PARTIAL, MATCHED, CANCELLED, FAILED] }
+    PriceMode:
+      type: string
+      enum: [LIMIT, MARKET]
+      description: LIMIT=지정가, MARKET=현재가(주문 시점 현재가를 price로 보냄)
+    OrderCreateRequest:
+      type: object
+      required: [stockCode, stockName, orderType, priceMode, price, quantity]
+      properties:
+        stockCode: { type: string, example: "005930" }
+        stockName: { type: string, example: 삼성전자 }
+        orderType: { $ref: '#/components/schemas/OrderType' }
+        priceMode: { $ref: '#/components/schemas/PriceMode' }
+        price: { type: integer, example: 70000, description: 지정가(원) }
+        quantity: { type: integer, example: 10 }
+        autoPriceImprovement:
+          type: boolean
+          default: false
+          description: 지정가 매수 시, 지정가보다 최대 5% 싼 매도호가가 있으면 그 가격에 체결
+      description: orderId·memberId·orderStatus·matchedQuantity·version·createdAt은 서버가 정하며 요청 값은 무시한다.
+    Order:
+      type: object
+      properties:
+        orderId: { type: integer, format: int64 }
+        memberId: { type: string }
+        stockCode: { type: string }
+        stockName: { type: string }
+        orderType: { $ref: '#/components/schemas/OrderType' }
+        orderStatus: { $ref: '#/components/schemas/OrderStatus' }
+        priceMode: { $ref: '#/components/schemas/PriceMode' }
+        autoPriceImprovement: { type: boolean }
+        price: { type: integer }
+        quantity: { type: integer }
+        matchedQuantity: { type: integer, description: 누적 체결 수량 }
+        matchedPrice: { type: integer, description: 가장 최근 체결가 }
+        lastUnmatchedReason: { type: string, enum: [NO_ELIGIBLE_PRICE, NO_ORDERBOOK_DATA, SYSTEM_ERROR], nullable: true }
+        lastAttemptAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, nullable: true }
+        version: { type: integer, format: int64 }
+    Holding:
+      type: object
+      properties:
+        stockCode: { type: string }
+        stockName: { type: string }
+        totalQuantity: { type: integer }
+        avgPrice: { type: number, description: 가중평균 매입단가 }
+        currentPrice: { type: integer }
+        profitRate: { type: number }
+        totalValue: { type: integer }
+        buyValue: { type: number }
+        profitValue: { type: number }
+    StockQuote:
+      type: object
+      description: KIS 시세. 장 마감 후엔 종가.
+      properties:
+        mkscShrnIscd: { type: string, description: 종목코드 }
+        htsKorIsnm: { type: string, description: 종목명(랭킹에서만) }
+        dataRank: { type: string }
+        stckPrpr: { type: string, description: 현재가 }
+        prdyVrss: { type: string, description: 전일 대비 }
+        prdyCtrt: { type: string, description: 전일 대비율(%) }
+        acmlVol: { type: string, description: 누적 거래량 }
+        prdyVol: { type: string, description: 전일 거래량 }
+    AskingPrice:
+      type: object
+      description: 호가 10단계(배열 index 0 = 최우선 호가)
+      properties:
+        stockCode: { type: string }
+        askPrices: { type: array, items: { type: string } }
+        askVolumes: { type: array, items: { type: string } }
+        bidPrices: { type: array, items: { type: string } }
+        bidVolumes: { type: array, items: { type: string } }
+        totalAskVolume: { type: string }
+        totalBidVolume: { type: string }
+    NewsAnalysis:
+      type: object
+      properties:
+        status: { type: string, enum: [ANALYZING, COMPLETED] }
+        direction: { type: string, enum: [UP, DOWN, FLAT], nullable: true }
+        reason: { type: string, nullable: true }
+        articleTitles: { type: array, items: { type: string } }
+    DeadLetter:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        originalTopic: { type: string }
+        messageKey: { type: string, description: 종목코드 }
+        payload: { type: string }
+        errorMessage: { type: string }
+        createdAt: { type: string, format: date-time }
+        replayedAt: { type: string, format: date-time, nullable: true }
+  responses:
+    Unauthorized:
+      description: 로그인 필요(세션 없음/만료)
+    Forbidden:
+      description: 관리자 아님(admin.member-id 불일치)
+
+paths:
+  /login:
+    post:
+      operationId: postLogin
+      security: []   # 인증 불필요(공개)
+      tags: [인증]
+      summary: 폼 로그인
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, description: 회원 ID }
+                password: { type: string }
+      responses:
+        '302':
+          description: 성공 시 /stockHome, 실패 시 /login?error 로 리다이렉트. 성공하면 SESSION 쿠키 발급
+  /oauth2/authorization/kakao:
+    get:
+      operationId: getOauth2AuthorizationKakao
+      security: []   # 인증 불필요(공개)
+      tags: [인증]
+      summary: 카카오 로그인 시작(최초 로그인 시 회원 자동 생성 - memberId = "kakao_" + 카카오ID)
+      responses:
+        '302': { description: 카카오 인가 페이지로 리다이렉트 }
+  /logout:
+    post:
+      operationId: postLogout
+      security: []   # 인증 불필요(공개)
+      tags: [인증]
+      summary: 로그아웃(세션 무효화)
+      responses:
+        '302': { description: /login 으로 리다이렉트 }
+
+  /api/member/join:
+    post:
+      operationId: postMemberJoin
+      security: []   # 인증 불필요(공개)
+      tags: [회원]
+      summary: 회원가입(가상 투자금 10,000,000원 지급)
+      description: seed·level·상태·가입경로는 서버가 정한다(요청 값 무시). 비밀번호는 BCrypt로 저장.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [memberId, password, name, phone]
+              properties:
+                memberId: { type: string }
+                password: { type: string }
+                name: { type: string }
+                email: { type: string }
+                phone: { type: string }
+      responses:
+        '200': { description: 가입 완료, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: 아이디/전화번호 중복, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+  /api/member/info:
+    get:
+      operationId: getMemberInfo
+      tags: [회원]
+      summary: 내 정보(잔고 포함)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memberId: { type: string }
+                  seed: { type: integer, description: 주문 가능 잔고(대기 매수 주문 예약분은 이미 빠져 있음) }
+                  level: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/member/profile:
+    patch:
+      operationId: patchMemberProfile
+      tags: [회원]
+      summary: 닉네임/전화번호 수정
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: 전화번호 중복 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/member/withdraw:
+    post:
+      operationId: postMemberWithdraw
+      tags: [회원]
+      summary: 회원 탈퇴(상태만 WITHDRAWN으로 - 이후 로그인 차단)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/order/create:
+    post:
+      operationId: postOrderCreate
+      tags: [주문]
+      summary: 주문 접수
+      description: |
+        한 트랜잭션에서 회원 행 락(SELECT ... FOR UPDATE) → 잔고(매수)/보유수량(매도) 확인 → 매수 금액 예약 차감 →
+        주문(PENDING) 저장 → Outbox 기록. 커밋 후 Kafka(stock-order, 키=종목코드)로 발행되어 그 종목을 맡은 서버가 체결을 시도한다.
+        접수 응답은 체결 결과를 기다리지 않는다 - 결과는 GET /api/order/stream 으로 받는다.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreateRequest' }
+      responses:
+        '200':
+          description: 접수 완료
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId: { type: integer, format: int64 }
+        '400':
+          description: 잔고 부족 / 보유 수량 부족 / 오전 8시 이전
+          content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/order/{orderId}/cancel:
+    post:
+      operationId: postOrderOrderIdCancel
+      tags: [주문]
+      summary: 미체결분 취소(매수는 미체결분 예약금 환급)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: 취소 완료, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: 이미 체결 완료/취소된 주문 }
+        '404': { description: 주문이 없거나 본인 주문이 아님(존재 여부를 구분해 알려주지 않음) }
+        '409': { description: "같은 순간 체결이 먼저 반영됨(Order @Version 충돌) - 취소 전체 롤백 후 다시 시도" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/order/history:
+    get:
+      operationId: getOrderHistory
+      tags: [주문]
+      summary: 내 주문 내역(최신순)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Order' } } } }
+  /api/order/holding:
+    get:
+      operationId: getOrderHolding
+      tags: [주문]
+      summary: 보유 종목(체결 원장 기준 가중평균 매입단가 + 현재가)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Holding' } } } } }
+  /api/order/memberStockInfo:
+    get:
+      operationId: getOrderMemberStockInfo
+      tags: [주문]
+      summary: 특정 종목의 추가 매도 가능 수량(보유 - 대기 매도)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: stockCode, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalQuantity: { type: integer }
+                  avgPrice: { type: number }
+  /api/order/realized-pnl:
+    get:
+      operationId: getOrderRealizedPnl
+      tags: [주문]
+      summary: 기간별 실현손익(매도 시점 가중평균 매입단가 기준)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date }, description: 기본값 이번 달 1일 }
+        - { name: to, in: query, schema: { type: string, format: date }, description: 기본값 오늘 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  series:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        pnl: { type: integer }
+  /api/order/stream:
+    get:
+      operationId: getOrderStream
+      tags: [주문]
+      summary: 내 주문 체결/장마감취소 결과 실시간 스트림(SSE)
+      description: |
+        event: order-result, data: {orderId, stockCode, stockName, orderStatus, quantity, price, orderType}.
+        체결은 그 종목을 맡은 서버에서 일어나도 Kafka(order-result) 브로드캐스트로 이 연결이 붙은 서버까지 전달된다.
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }
+  /api/order/holding/stream:
+    get:
+      operationId: getOrderHoldingStream
+      tags: [주문]
+      summary: 보유 종목 실시간 스트림(SSE) - 보유 종목 시세가 바뀌거나 체결이 나면 최대 1초에 한 번
+      description: "event: holding, data: Holding 배열"
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }
+
+  /api/volume/cached:
+    get:
+      operationId: getVolumeCached
+      security: []   # 인증 불필요(공개)
+      tags: [시세]
+      summary: 거래량 상위 30 랭킹(마지막 값 즉시 반환, 장 마감 후엔 종가 랭킹)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updatedTime: { type: string }
+                  count: { type: integer }
+                  data: { type: array, items: { $ref: '#/components/schemas/StockQuote' } }
+  /api/volume/stream:
+    get:
+      operationId: getVolumeStream
+      security: []   # 인증 불필요(공개)
+      tags: [시세]
+      summary: "랭킹 실시간 스트림(SSE, 장중 30초마다) - event: volume-rank"
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }
+  /api/stock/{code}/cached:
+    get:
+      operationId: getStockCodeCached
+      security: []   # 인증 불필요(공개)
+      tags: [시세]
+      summary: 종목 마지막 시세 즉시 반환(KIS를 매번 호출하지 않음)
+      description: 처음 보는 종목이면 시세 수집기에 구독을 요청하고 204를 돌려준다. 잠시 후 다시 부르면 값이 있다.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string, example: "005930" } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/StockQuote' } } } }
+        '204': { description: 아직 시세 없음(구독 요청됨) }
+  /api/stock/{code}/stream:
+    get:
+      operationId: getStockCodeStream
+      security: []   # 인증 불필요(공개)
+      tags: [시세]
+      summary: "종목 시세 실시간 스트림(SSE) - event: stock-detail. 접속 즉시 마지막 값(장 마감 후엔 종가)을 먼저 보냄"
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }
+  /api/stock/{code}/asking/stream:
+    get:
+      operationId: getStockCodeAskingStream
+      security: []   # 인증 불필요(공개)
+      tags: [시세]
+      summary: "호가 10단계 실시간 스트림(SSE) - event: asking-price, data: AskingPrice"
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }
+
+  /api/news/{name}:
+    get:
+      operationId: getNewsName
+      security: []   # 인증 불필요(공개)
+      tags: [뉴스]
+      summary: 종목명으로 네이버 뉴스 검색(최근)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string, example: 삼성전자 } }
+      responses:
+        '200':
+          description: 네이버 검색 결과 items 그대로(title, originallink, link, description, pubDate)
+          content: { application/json: { schema: { type: array, items: { type: object, additionalProperties: { type: string } } } } }
+  /api/news/{code}/analysis:
+    get:
+      operationId: getNewsCodeAnalysis
+      security: []   # 인증 불필요(공개)
+      tags: [뉴스]
+      summary: 오늘 등락과 뉴스의 관련성 AI 분석(Claude 구조화 출력, 종목·일 단위 캐시)
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+        - { name: name, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 실질 재료가 없거나 분석 실패면 status=ANALYZING, content: { application/json: { schema: { $ref: '#/components/schemas/NewsAnalysis' } } } }
+
+  /api/admin/session-count:
+    get:
+      operationId: getAdminSessionCount
+      tags: [어드민]
+      summary: 현재 로그인 세션 수(전체 서버 합계 - SPRING_SESSION 기준)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { count: { type: integer } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/dead-letters:
+    get:
+      operationId: getAdminDeadLetters
+      tags: [어드민]
+      summary: 재시도 끝에 처리 못 한 Kafka 메시지(DLQ) 중 아직 재발행 안 한 것
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DeadLetter' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/dead-letters/{id}/replay:
+    post:
+      operationId: postAdminDeadLettersIdReplay
+      tags: [어드민]
+      summary: DLQ 메시지를 원래 토픽으로 재발행(이미 재발행한 건 거부 - 버튼 중복 클릭 대비)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: 재발행 완료 }
+        '404': { description: 없거나 이미 재발행함 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/logs:
+    get:
+      operationId: getAdminLogs
+      tags: [어드민]
+      summary: Loki 로그 조회(LogQL) - 미체결 주문의 원인 추적용
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: query, in: query, required: true, schema: { type: string } }
+        - { name: fromEpochSec, in: query, schema: { type: integer, format: int64 } }
+        - { name: toEpochSec, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: 로그 줄 목록 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/alerts/stream:
+    get:
+      operationId: getAdminAlertsStream
+      tags: [어드민]
+      summary: "관리자 실시간 알림(SSE) - 체결 시스템 오류, FDS 탐지, DLQ 적재. event: admin-alert"
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: 이벤트 스트림, content: { text/event-stream: { schema: { type: string } } } }

@@ -10,7 +10,8 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@Table(name = "trades")
+/* 보유종목·실현손익 계산(회원 체결 원장을 시간순으로 훑음 - 보유주식 SSE가 시세 틱마다 호출, 1.5초 캐시) */
+@Table(name = "trades", indexes = @Index(name = "idx_trades_member_matched", columnList = "memberId, matchedAt"))
 public class Trade {
 
     @Id

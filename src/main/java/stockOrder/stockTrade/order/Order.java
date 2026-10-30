@@ -9,7 +9,14 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@Table(name = "orders")
+/* 핫패스 인덱스 (근거와 측정: docs/db-design.md)
+   - status_stock: 30초 배치의 대기 종목 조회(DISTINCT stock_code WHERE status IN), 파티션 할당 시 대기 주문 로드,
+     매도 접수 시 예약 수량 합계(대기 주문이 전체의 소수라 status+stock으로 몇 행만 남음)
+   - member_created: 회원 주문 내역(최신순) */
+@Table(name = "orders", indexes = {
+        @Index(name = "idx_orders_status_stock", columnList = "orderStatus, stockCode"),
+        @Index(name = "idx_orders_member_created", columnList = "memberId, createdAt")
+})
 public class Order {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
