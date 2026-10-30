@@ -26,6 +26,7 @@
 
 테스트:
 - **`./gradlew test`는 Docker가 실행 중이어야 한다.** 통합 테스트(`@DataJpaTest`, `@SpringBootTest`)는 `support/MySqlContainerConfig`(Testcontainers `mysql:8.4` + `@ServiceConnection`)로 MySQL 컨테이너를 띄워서 돈다 — 운영 파일 DB나 실제 KIS API를 건드리지 않는다.
+- `cluster/MultiServerEndToEndTest`: Kafka·MySQL 컨테이너 위에 앱 컨텍스트 2대를 `SpringApplicationBuilder`로 띄워 파티션 분배·담당 서버 체결·인계를 검증. 설정은 반드시 커맨드라인 인자(`--key=value`)로 넘길 것 - `.properties()`는 최저 우선순위라 `application.yaml`/로컬 `application-secret.yaml`에 덮여 로컬 DB·Kafka·실제 KIS를 건드린다. 장 시간 판정은 `marketClock` 빈(`Clock`)을 정규장 시각으로 고정해서 장 마감 후에도 체결 경로를 탄다(`KisService.isMarketOpen`이 이 시계를 씀, 운영은 서울 시스템 시계).
 - `StockTradeApplicationTests`는 `KisService`/`KisWebSocketService`를 `@MockitoBean`으로 막고 Kafka 리스너 자동 시작을 꺼서 외부 연동 없이 기동만 확인한다. 실제 KIS를 호출하면 연속 실행 시 토큰 발급 제한에 걸려 실패했었음.
 
 이 저장소에는 설정된 린터가 없다.

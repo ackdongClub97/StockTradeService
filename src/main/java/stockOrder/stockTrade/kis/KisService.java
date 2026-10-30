@@ -4,6 +4,7 @@ import io.netty.handler.codec.PrematureChannelClosureException;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 
@@ -354,12 +355,21 @@ public class KisService {
         return priceUpdateSink.asFlux();
     }
 
+    /* 장 시간 판정용 시계 - 기본은 서울 시간 시스템 시계. 테스트(다중 서버 E2E 등)에서 정규장 시각으로 고정할 때만
+       "marketClock" 빈으로 바꿔 끼운다(장 마감 후에도 체결 경로를 검증하기 위함, 운영 동작은 그대로) */
+    private Clock marketClock = Clock.system(ZoneId.of("Asia/Seoul"));
+
+    @Autowired(required = false)
+    void setMarketClock(@Qualifier("marketClock") Clock marketClock) {
+        this.marketClock = marketClock;
+    }
+
     public boolean isMarketOpen() {
-        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
+        LocalTime now = LocalTime.now(marketClock);
         LocalTime open = LocalTime.of(9, 0);
         LocalTime close = LocalTime.of(15, 30);
 
-        DayOfWeek day = LocalDate.now(ZoneId.of("Asia/Seoul")).getDayOfWeek();
+        DayOfWeek day = LocalDate.now(marketClock).getDayOfWeek();
         boolean isWeekday  = day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
 
         return isWeekday && now.isAfter(open) && now.isBefore(close);
@@ -367,7 +377,7 @@ public class KisService {
 
     /* 주문 접수 시작 시각(오전 8시) 이전인지 - 이 시간 전에는 주문 자체를 받지 않음 */
     public boolean isBeforeOrderWindow() {
-        LocalTime now = LocalTime.now(ZoneId.of("Asia/Seoul"));
+        LocalTime now = LocalTime.now(marketClock);
         return now.isBefore(LocalTime.of(8, 0));
     }
 
